@@ -87,14 +87,17 @@ app.get('/api/candle/paper', async (request: any) => {
   return candles[0]
 })
 
+const port = Number(process.env.PORT) || 3000
+const host = process.env.HOST || '0.0.0.0'
+
 try {
   await app.listen({
-    port: 3000,
-    host: '127.0.0.1',
+    port,
+    host,
   })
 
   console.log(
-    'Backend running on http://127.0.0.1:3000',
+    `Backend running on http://${host}:${port}`,
   )
 } catch (error) {
   app.log.error(error)
