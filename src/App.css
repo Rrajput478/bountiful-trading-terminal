@@ -1,0 +1,175 @@
+.app {
+  min-height: 100vh;
+  background: #0b0e13;
+  color: #f5f7fa;
+  font-family: Inter, system-ui, sans-serif;
+}
+
+.topbar {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  border-bottom: 1px solid #1d232d;
+  background: #0e1218;
+}
+
+.brand {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.live {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: #8f98a8;
+}
+
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #35d07f;
+}
+
+.market {
+  padding: 18px 20px;
+  border-bottom: 1px solid #1d232d;
+}
+
+.symbol {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.price {
+  margin-top: 4px;
+  font-size: 14px;
+  color: #35d07f;
+}
+
+.main {
+  padding: 20px;
+}
+
+.chart {
+  height: 430px;
+  border: 1px solid #1d232d;
+  border-radius: 14px;
+  background:
+    linear-gradient(#151a22 1px, transparent 1px),
+    linear-gradient(90deg, #151a22 1px, transparent 1px);
+  background-size: 50px 50px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #596273;
+}
+
+.timeframes {
+  display: flex;
+  gap: 8px;
+  margin: 14px 0;
+  overflow-x: auto;
+}
+
+.timeframe {
+  border: 1px solid #1d232d;
+  background: #11161d;
+  color: #8f98a8;
+  padding: 8px 13px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.timeframe.active {
+  background: #202733;
+  color: #ffffff;
+}
+
+.order-panel {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.order-box {
+  padding: 16px;
+  border: 1px solid #1d232d;
+  border-radius: 12px;
+  background: #0e1218;
+}
+
+.order-label {
+  font-size: 12px;
+  color: #737d8d;
+  margin-bottom: 8px;
+}
+
+.quantity {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px;
+  border-radius: 8px;
+  border: 1px solid #252c37;
+  background: #11161d;
+  color: white;
+  outline: none;
+}
+
+.trade-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.trade-button {
+  flex: 1;
+  border: none;
+  padding: 13px;
+  border-radius: 9px;
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.buy {
+  background: #16865a;
+}
+
+.sell {
+  background: #b84048;
+}
+
+.bottom-nav {
+  display: flex;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.bottom-item {
+  flex: 1;
+  padding: 13px;
+  text-align: center;
+  border: 1px solid #1d232d;
+  border-radius: 10px;
+  color: #8993a3;
+  background: #0e1218;
+}
+
+@media (max-width: 700px) {
+  .chart {
+    height: 360px;
+  }
+
+  .topbar {
+    padding: 0 14px;
+  }
+
+  .main {
+    padding: 14px;
+  }
+}

@@ -1,0 +1,147 @@
+.welcome-page {
+  min-height: 100vh;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #080b10;
+  color: #f5f7fa;
+  font-family: Inter, system-ui, sans-serif;
+}
+
+.welcome-glow {
+  position: absolute;
+  width: 500px;
+  height: 500px;
+  border-radius: 50%;
+  background: rgba(22, 134, 90, 0.12);
+  filter: blur(100px);
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.welcome-content {
+  position: relative;
+  z-index: 1;
+  width: min(90%, 560px);
+  text-align: center;
+}
+
+.welcome-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 13px;
+  border: 1px solid #202833;
+  border-radius: 999px;
+  background: #0e131a;
+  color: #7f8999;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #35d07f;
+  box-shadow: 0 0 10px rgba(53, 208, 127, 0.5);
+}
+
+.welcome-content h1 {
+  margin: 28px 0 0;
+  font-size: clamp(42px, 8vw, 72px);
+  line-height: 0.95;
+  letter-spacing: -3px;
+  font-weight: 800;
+}
+
+.welcome-content h1 span {
+  display: block;
+  margin-top: 10px;
+  color: #35d07f;
+}
+
+.welcome-description {
+  max-width: 460px;
+  margin: 25px auto 0;
+  color: #858f9f;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.start-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 32px;
+  padding: 15px 24px;
+  border-radius: 10px;
+  background: #16865a;
+  color: white;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  transition: 0.2s ease;
+}
+
+.start-button:hover {
+  background: #1b9a68;
+  transform: translateY(-2px);
+}
+
+.start-button span {
+  font-size: 19px;
+}
+
+.welcome-features {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-top: 35px;
+}
+
+.feature {
+  color: #687384;
+  font-size: 12px;
+}
+
+.feature span {
+  color: #35d07f;
+  margin-right: 5px;
+}
+
+.welcome-footer {
+  position: absolute;
+  bottom: 20px;
+  color: #454e5c;
+  font-size: 11px;
+}
+
+@media (max-width: 600px) {
+  .welcome-content h1 {
+    letter-spacing: -2px;
+  }
+
+  .welcome-description {
+    font-size: 14px;
+    padding: 0 15px;
+  }
+
+  .welcome-features {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .welcome-footer {
+    bottom: 14px;
+  }
+}
