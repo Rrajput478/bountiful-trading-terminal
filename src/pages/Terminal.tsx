@@ -163,10 +163,6 @@ function Terminal() {
       ? buyNotional / leverage
       : 0
 
-  const sellInitialMargin =
-    leverage > 0
-      ? sellNotional / leverage
-      : 0
 
   const buyEstimatedFee =
     buyNotional * estimatedFeeRate
