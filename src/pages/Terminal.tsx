@@ -1,1547 +1,862 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link, useSearchParams } from 'react-router'
 import Chart from '../components/Chart'
 import './Terminal.css'
 import { useTrading } from '../hooks/useTrading'
-import type { OrderRequest } from '../services/api'
+import * as api from '../services/api'
 
-type SymbolName =
-  | 'BTC/USDT'
-  | 'ETH/USDT'
-  | 'SOL/USDT'
+type SymbolCategory = 'ALL' | 'CRYPTO' | 'INDIAN'
+type SizeMode = 'LOT' | 'QTY' | 'PERCENT'
+type OrderType = 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT'
+type BottomTab = 'Positions' | 'Orders' | 'History' | 'Journal' | 'Balances'
 
-type Quote = {
-  bid: number
-  ask: number
-  last: number
-  timestamp: number
+interface SymbolInfo {
+  symbol: string
+  name: string
+  category: 'CRYPTO' | 'INDIAN'
+  basePrice: number
+  decimals: number
+  lotSize: number
+  currency: 'USDT' | 'INR'
 }
 
-type SizeMode =
-  | 'LOT'
-  | 'QUANTITY'
-  | 'MARGIN'
-
-type ChartLayout =
-  | 'SINGLE'
-  | 'DUAL'
-
-type Theme =
-  | 'dark'
-  | 'light'
-
-type OrderType =
-  | 'MARKET'
-  | 'LIMIT'
-  | 'STOP'
-  | 'STOP_LIMIT'
-
-const symbols: SymbolName[] = [
-  'BTC/USDT',
-  'ETH/USDT',
-  'SOL/USDT',
+const AVAILABLE_SYMBOLS: SymbolInfo[] = [
+  // Crypto
+  { symbol: 'BTC/USDT', name: 'Bitcoin', category: 'CRYPTO', basePrice: 67450, decimals: 2, lotSize: 1, currency: 'USDT' },
+  { symbol: 'ETH/USDT', name: 'Ethereum', category: 'CRYPTO', basePrice: 3520, decimals: 2, lotSize: 1, currency: 'USDT' },
+  { symbol: 'SOL/USDT', name: 'Solana', category: 'CRYPTO', basePrice: 182.4, decimals: 2, lotSize: 1, currency: 'USDT' },
+  { symbol: 'BNB/USDT', name: 'Binance Coin', category: 'CRYPTO', basePrice: 590.2, decimals: 2, lotSize: 1, currency: 'USDT' },
+  { symbol: 'DOGE/USDT', name: 'Dogecoin', category: 'CRYPTO', basePrice: 0.165, decimals: 4, lotSize: 100, currency: 'USDT' },
+  // Indian Markets (Upstox)
+  { symbol: 'NIFTY 50', name: 'Nifty 50 Index', category: 'INDIAN', basePrice: 25930, decimals: 2, lotSize: 25, currency: 'INR' },
+  { symbol: 'BANKNIFTY', name: 'Bank Nifty Index', category: 'INDIAN', basePrice: 54100, decimals: 2, lotSize: 15, currency: 'INR' },
+  { symbol: 'RELIANCE', name: 'Reliance Industries', category: 'INDIAN', basePrice: 2980.5, decimals: 2, lotSize: 1, currency: 'INR' },
+  { symbol: 'TCS', name: 'Tata Consultancy Services', category: 'INDIAN', basePrice: 4250, decimals: 2, lotSize: 1, currency: 'INR' },
+  { symbol: 'HDFCBANK', name: 'HDFC Bank Ltd', category: 'INDIAN', basePrice: 1680, decimals: 2, lotSize: 1, currency: 'INR' },
+  { symbol: 'TATAMOTORS', name: 'Tata Motors', category: 'INDIAN', basePrice: 975, decimals: 2, lotSize: 1, currency: 'INR' },
+  { symbol: 'INFY', name: 'Infosys Limited', category: 'INDIAN', basePrice: 1890, decimals: 2, lotSize: 1, currency: 'INR' },
 ]
 
-const timeframes = [
-  '1m',
-  '5m',
-  '15m',
-  '1H',
-  '4H',
-  '1D',
-]
+const TIMEFRAMES = ['1m', '5m', '15m', '1H', '4H', '1D']
 
 function Terminal() {
-  // Use trading hook
-  const trading = useTrading()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const initialBrokerParam = searchParams.get('broker') || localStorage.getItem('active_broker') || 'paper'
 
-  const [symbol, setSymbol] =
-    useState<SymbolName>('BTC/USDT')
+  const trading = useTrading(initialBrokerParam)
 
-  const [timeframe, setTimeframe] =
-    useState('1m')
+  // State
+  const [symbol, setSymbol] = useState<string>('BTC/USDT')
+  const [symbolCategory, setSymbolCategory] = useState<SymbolCategory>('ALL')
+  const [searchFilter, setSearchFilter] = useState<string>('')
+  const [timeframe, setTimeframe] = useState<string>('1m')
+  const [watchlistOpen, setWatchlistOpen] = useState(false)
+  const [orderbookOpen, setOrderbookOpen] = useState(true)
 
-  const [watchlistOpen, setWatchlistOpen] =
-    useState(false)
+  // Trading state
+  const [size, setSize] = useState('0.1')
+  const [sizeMode, setSizeMode] = useState<SizeMode>('LOT')
+  const [orderType, setOrderType] = useState<OrderType>('MARKET')
+  const [limitPrice, setLimitPrice] = useState('')
+  const [stopPrice, setStopPrice] = useState('')
+  const [leverage, setLeverage] = useState<number>(5)
+  const [leverageEditorOpen, setLeverageEditorOpen] = useState(false)
+  const [oneTapMode, setOneTapMode] = useState(true)
 
-  const [size, setSize] =
-    useState('0.01')
+  // Layout & UI
+  const [activeTab, setActiveTab] = useState<BottomTab>('Positions')
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark')
+  const [chartLayout, setChartLayout] = useState<'SINGLE' | 'DUAL'>('SINGLE')
+  const [quotes, setQuotes] = useState<Record<string, api.Quote>>({})
+  const [orderBook, setOrderBook] = useState<{ bids: any[]; asks: any[] }>({ bids: [], asks: [] })
 
-  const [sizeMode, setSizeMode] =
-    useState<SizeMode>('LOT')
+  // Active Symbol metadata
+  const currentSymbolInfo = useMemo(() => {
+    return AVAILABLE_SYMBOLS.find((s) => s.symbol === symbol) || AVAILABLE_SYMBOLS[0]
+  }, [symbol])
 
-  const [orderType, setOrderType] =
-    useState<OrderType>('MARKET')
-
-  const [limitPrice, setLimitPrice] =
-    useState('')
-
-  const [stopPrice, setStopPrice] =
-    useState('')
-
-  const [activeTab, setActiveTab] =
-    useState('Positions')
-
-  const [quotes, setQuotes] =
-    useState<Record<string, Quote>>({})
-
-  const [chartLayout, setChartLayout] =
-    useState<ChartLayout>('SINGLE')
-
-  const [oneTapMode, setOneTapMode] =
-    useState(false)
-
-  const [theme, setTheme] =
-    useState<Theme>('dark')
-
-  /* ---------------- POSITIONS & ORDERS ---------------- */
-  // Now using trading hook for positions, orders, balances
-  // Remove local state - use trading.positions, trading.orders, trading.balances
-
-  /* ---------------- LEVERAGE ---------------- */
-
-  const [leverage, setLeverage] =
-    useState(3)
-
-  const [leverageInput, setLeverageInput] =
-    useState('3')
-
-  const [leverageEditorOpen, setLeverageEditorOpen] =
-    useState(false)
-
-  const [pendingHighLeverage, setPendingHighLeverage] =
-    useState<number | null>(null)
-
-  /*
-   * Temporary paper values.
-   * These will later come from backend/broker capabilities.
-   */
-  const availableBalance = 10000
-  const estimatedFeeRate = 0.001
-  const lotMultiplier = 1
-
-  const selectedQuote = quotes[symbol]
-
-  const askPrice =
-    selectedQuote?.ask ?? 0
-
-  const bidPrice =
-    selectedQuote?.bid ?? 0
-
-  const sizeNumber =
-    Number.parseFloat(size) || 0
-
-  /* ---------------- SIZE CALCULATION ---------------- */
-
-  const estimatedQuantity = useMemo(() => {
-    if (!selectedQuote) {
-      return 0
-    }
-
-    if (sizeMode === 'QUANTITY') {
-      return sizeNumber
-    }
-
-    if (sizeMode === 'LOT') {
-      return sizeNumber * lotMultiplier
-    }
-
-    if (askPrice <= 0) {
-      return 0
-    }
-
-    return (
-      (sizeNumber * leverage) /
-      askPrice
-    )
-  }, [
-    askPrice,
-    leverage,
-    selectedQuote,
-    sizeMode,
-    sizeNumber,
-  ])
-
-  const buyNotional =
-    estimatedQuantity * askPrice
-
-  const sellNotional =
-    estimatedQuantity * bidPrice
-
-  const buyInitialMargin =
-    leverage > 0
-      ? buyNotional / leverage
-      : 0
-
-
-  const buyEstimatedFee =
-    buyNotional * estimatedFeeRate
-
-  /* ---------------- FORMATTING ---------------- */
-
-  const formatPrice = (
-    value: number,
-  ) => {
-    if (!value) {
-      return '—'
-    }
-
-    return value.toLocaleString(
-      undefined,
-      {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      },
-    )
+  // Sync broker selection
+  const handleBrokerChange = (newBroker: string) => {
+    trading.setActiveBroker(newBroker)
+    localStorage.setItem('active_broker', newBroker)
+    setSearchParams({ broker: newBroker })
   }
 
-  const formatNumber = (
-    value: number,
-  ) => {
-    if (!value) {
-      return '0'
-    }
-
-    return value.toLocaleString(
-      undefined,
-      {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 6,
-      },
-    )
-  }
-
-  /* ---------------- LEVERAGE STATE ---------------- */
-
-  const leverageRisk =
-    leverage <= 3
-      ? 'normal'
-      : leverage <= 10
-        ? 'warning'
-        : 'danger'
-
-  /* ---------------- WATCHLIST ---------------- */
-
-  const selectSymbol = (
-    nextSymbol: SymbolName,
-  ) => {
-    setSymbol(nextSymbol)
-    setWatchlistOpen(false)
-  }
-
-  /* ---------------- ORDER TYPE ---------------- */
-
-  const changeOrderType = (
-    nextType: OrderType,
-  ) => {
-    setOrderType(nextType)
-
-    /*
-     * When switching to a price-based order,
-     * prefill the relevant field with current market price.
-     */
-    if (
-      nextType === 'LIMIT' &&
-      !limitPrice
-    ) {
-      setLimitPrice(
-        askPrice > 0
-          ? String(
-              Number(
-                askPrice.toFixed(2),
-              ),
-            )
-          : '',
-      )
-    }
-
-    if (
-      nextType === 'STOP' &&
-      !stopPrice
-    ) {
-      setStopPrice(
-        askPrice > 0
-          ? String(
-              Number(
-                askPrice.toFixed(2),
-              ),
-            )
-          : '',
-      )
-    }
-
-    if (
-      nextType === 'STOP_LIMIT'
-    ) {
-      if (!stopPrice) {
-        setStopPrice(
-          askPrice > 0
-            ? String(
-                Number(
-                  askPrice.toFixed(2),
-                ),
-              )
-            : '',
-        )
-      }
-
-      if (!limitPrice) {
-        setLimitPrice(
-          askPrice > 0
-            ? String(
-                Number(
-                  askPrice.toFixed(2),
-                ),
-              )
-            : '',
-        )
-      }
-    }
-  }
-
-  /* ---------------- LEVERAGE EDITOR ---------------- */
-
-  const openLeverageEditor = () => {
-    setLeverageInput(
-      String(leverage),
-    )
-
-    setPendingHighLeverage(null)
-    setLeverageEditorOpen(true)
-  }
-
-  const closeLeverageEditor = () => {
-    setLeverageEditorOpen(false)
-    setPendingHighLeverage(null)
-
-    setLeverageInput(
-      String(leverage),
-    )
-  }
-
-  const requestLeverageChange = () => {
-    const parsed =
-      Number.parseFloat(
-        leverageInput,
-      )
-
-    if (
-      !Number.isFinite(parsed) ||
-      parsed <= 0
-    ) {
-      return
-    }
-
-    const next =
-      Math.min(
-        Math.max(parsed, 1),
-        100,
-      )
-
-    if (next > 10) {
-      setPendingHighLeverage(next)
-      return
-    }
-
-    setLeverage(next)
-
-    setLeverageInput(
-      String(next),
-    )
-
-    closeLeverageEditor()
-  }
-
-  /*
-   * High leverage is intentionally a single-click
-   * acknowledgement + apply action.
-   */
-  const acknowledgeAndApplyHighLeverage = () => {
-    if (
-      pendingHighLeverage === null
-    ) {
-      return
-    }
-
-    setLeverage(
-      pendingHighLeverage,
-    )
-
-    setLeverageInput(
-      String(
-        pendingHighLeverage,
-      ),
-    )
-
-    closeLeverageEditor()
-  }
-
-  /* ---------------- ORDER EXECUTION ---------------- */
-
-  const executeTrade = async (side: 'BUY' | 'SELL') => {
-    if (trading.isExecuting) {
-      return
-    }
-
-    if (estimatedQuantity <= 0) {
-      alert('Invalid order quantity')
-      return
-    }
-
-    try {
-      const orderRequest: OrderRequest = {
-        symbol,
-        side,
-        type: orderType,
-        quantity: estimatedQuantity,
-      }
-
-      // Add price for LIMIT and STOP_LIMIT orders
-      if (orderType === 'LIMIT' || orderType === 'STOP_LIMIT') {
-        const price = Number.parseFloat(limitPrice)
-        if (!price || price <= 0) {
-          alert('Please enter a valid limit price')
-          return
-        }
-        orderRequest.price = price
-      }
-
-      // Add stop price for STOP and STOP_LIMIT orders
-      if (orderType === 'STOP' || orderType === 'STOP_LIMIT') {
-        const stop = Number.parseFloat(stopPrice)
-        if (!stop || stop <= 0) {
-          alert('Please enter a valid stop price')
-          return
-        }
-        orderRequest.stopPrice = stop
-      }
-
-      await trading.placeOrder(orderRequest)
-    } catch (error) {
-      console.error('Order execution failed:', error)
-    }
-  }
-
-  /* ---------------- QUOTES ---------------- */
-
+  // Fetch Quotes & Orderbook periodically
   useEffect(() => {
     let active = true
 
-    const loadQuotes = async () => {
+    const fetchMarketData = async () => {
       try {
-        const results =
-          await Promise.all(
-            symbols.map(
-              async (item) => {
-                const response =
-                  await fetch(
-                    `http://127.0.0.1:3000/api/quote/paper?symbol=${encodeURIComponent(
-                      item,
-                    )}`,
-                  )
-
-                if (!response.ok) {
-                  throw new Error(
-                    `Quote request failed for ${item}`,
-                  )
-                }
-
-                const data =
-                  await response.json()
-
-                return {
-                  symbol: item,
-                  quote:
-                    data as Quote,
-                }
-              },
-            ),
-          )
-
-        if (!active) {
-          return
+        const q = await api.getQuote(symbol)
+        if (active) {
+          setQuotes((prev) => ({ ...prev, [symbol]: q }))
         }
+      } catch (err) {
+        // silent
+      }
 
-        const nextQuotes:
-          Record<string, Quote> = {}
-
-        for (const result of results) {
-          nextQuotes[
-            result.symbol
-          ] = result.quote
+      try {
+        const book = await api.getOrderBook(symbol)
+        if (active && book) {
+          setOrderBook(book)
         }
-
-        setQuotes(nextQuotes)
-      } catch (error) {
-        console.error(
-          'Failed to load quotes:',
-          error,
-        )
+      } catch (err) {
+        // silent
       }
     }
 
-    loadQuotes()
+    fetchMarketData()
+    const interval = setInterval(fetchMarketData, 1000)
+    return () => {
+      active = false
+      clearInterval(interval)
+    }
+  }, [symbol])
 
-    const interval =
-      setInterval(
-        loadQuotes,
-        1000,
-      )
+  // Fetch all quotes for watchlist
+  useEffect(() => {
+    let active = true
+    const fetchWatchlistQuotes = async () => {
+      const updated: Record<string, api.Quote> = {}
+      for (const item of AVAILABLE_SYMBOLS) {
+        try {
+          const q = await api.getQuote(item.symbol)
+          updated[item.symbol] = q
+        } catch (e) {
+          // ignore
+        }
+      }
+      if (active) {
+        setQuotes((prev) => ({ ...prev, ...updated }))
+      }
+    }
 
+    fetchWatchlistQuotes()
+    const interval = setInterval(fetchWatchlistQuotes, 3000)
     return () => {
       active = false
       clearInterval(interval)
     }
   }, [])
 
-  /*
-   * Current second chart is intentionally
-   * independent. Synchronised multi-chart
-   * interaction can be added later.
-   */
-  const secondSymbol =
-    symbol === 'BTC/USDT'
-      ? 'ETH/USDT'
-      : 'BTC/USDT'
+  const selectedQuote = quotes[symbol]
+  const currentPrice = selectedQuote?.last || currentSymbolInfo.basePrice
+  const askPrice = selectedQuote?.ask || currentPrice * 1.0002
+  const bidPrice = selectedQuote?.bid || currentPrice * 0.9998
+  const change24h = selectedQuote?.change24h || 0
+
+  // Filtered symbols for watchlist
+  const filteredSymbols = useMemo(() => {
+    return AVAILABLE_SYMBOLS.filter((s) => {
+      const matchCat =
+        symbolCategory === 'ALL' ||
+        (symbolCategory === 'CRYPTO' && s.category === 'CRYPTO') ||
+        (symbolCategory === 'INDIAN' && s.category === 'INDIAN')
+      const matchSearch =
+        s.symbol.toLowerCase().includes(searchFilter.toLowerCase()) ||
+        s.name.toLowerCase().includes(searchFilter.toLowerCase())
+      return matchCat && matchSearch
+    })
+  }, [symbolCategory, searchFilter])
+
+  // Computed Quantity
+  const computedQuantity = useMemo(() => {
+    const rawVal = parseFloat(size) || 0
+    if (sizeMode === 'QTY') return rawVal
+    if (sizeMode === 'LOT') return rawVal * currentSymbolInfo.lotSize
+    if (sizeMode === 'PERCENT') {
+      const balance = trading.balances[0]?.available || 10000
+      const marginAllocation = (balance * (rawVal / 100))
+      return Number(((marginAllocation * leverage) / currentPrice).toFixed(4))
+    }
+    return rawVal
+  }, [size, sizeMode, currentSymbolInfo, trading.balances, leverage, currentPrice])
+
+  const notionalValue = computedQuantity * currentPrice
+  const requiredMargin = leverage > 0 ? notionalValue / leverage : notionalValue
+
+  // Order Execution Handlers
+  const handleExecute = async (side: 'BUY' | 'SELL') => {
+    if (computedQuantity <= 0) {
+      alert('Please specify a valid quantity or size')
+      return
+    }
+
+    const orderReq: api.OrderRequest = {
+      symbol,
+      side,
+      type: orderType,
+      quantity: Number(computedQuantity.toFixed(4)),
+      price: orderType === 'LIMIT' || orderType === 'STOP_LIMIT' ? parseFloat(limitPrice) || currentPrice : undefined,
+      stopPrice: orderType === 'STOP' || orderType === 'STOP_LIMIT' ? parseFloat(stopPrice) || currentPrice : undefined,
+      leverage,
+    }
+
+    await trading.placeOrder(orderReq)
+  }
+
+  const handleClosePosition = async (posSymbol: string) => {
+    await trading.closePosition(posSymbol)
+  }
+
+  const handleCancelOrder = async (orderId: string) => {
+    await trading.cancelOrder(orderId)
+  }
+
+  const formatCurrency = (val: number | undefined, curr = currentSymbolInfo.currency) => {
+    if (val === undefined || isNaN(val)) return '—'
+    const prefix = curr === 'INR' ? '₹' : '$'
+    return `${prefix}${val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  }
 
   return (
-    <div
-      className={`terminal-page ${
-        theme === 'light'
-          ? 'light'
-          : ''
-      }`}
-    >
-      {/* =====================================================
-          HEADER
-          ===================================================== */}
-
+    <div className={`terminal-page ${theme}`}>
+      {/* 1. Header Bar */}
       <header className="terminal-header">
-        <div className="terminal-brand">
+        <div className="header-left">
           <button
             className="mobile-menu-button"
-            onClick={() =>
-              setWatchlistOpen(true)
-            }
-            aria-label="Open watchlist"
+            onClick={() => setWatchlistOpen(!watchlistOpen)}
+            title="Toggle Watchlist"
           >
             ☰
           </button>
+          <div className="brand-mark">⚡</div>
+          <span className="brand-name">BOUNTIFUL</span>
 
-          <div className="brand-mark">
-            B
+          {/* Active Broker Selector Badge */}
+          <div className="broker-badge-pill">
+            <span className="broker-indicator-dot online"></span>
+            <select
+              value={trading.activeBroker}
+              onChange={(e) => handleBrokerChange(e.target.value)}
+              className="broker-select"
+            >
+              <option value="paper">⚡ Paper Trading (Demo $100k)</option>
+              <option value="upstox">📈 Upstox Pro V2 (India)</option>
+              <option value="coindcx">🪙 CoinDCX Pro (Crypto)</option>
+            </select>
           </div>
+        </div>
 
-          <div>
-            <div className="brand-title">
-              Bountiful Trading
-            </div>
-
-            <div className="brand-subtitle">
-              Paper Terminal
-            </div>
+        {/* Current Symbol Quick Bar */}
+        <div className="header-center">
+          <div className="symbol-pill" onClick={() => setWatchlistOpen(true)}>
+            <span className="symbol-title">{symbol}</span>
+            <span className="symbol-name-sub">{currentSymbolInfo.name}</span>
+          </div>
+          <div className="live-price-badge">
+            <span className="price-val">{formatCurrency(currentPrice)}</span>
+            <span className={`price-change ${change24h >= 0 ? 'up' : 'down'}`}>
+              {change24h >= 0 ? `+${change24h}%` : `${change24h}%`}
+            </span>
           </div>
         </div>
 
-        <div className="header-symbol">
-          <strong>
-            {symbol}
-          </strong>
-
-          <span className="header-price">
-            {selectedQuote
-              ? formatPrice(
-                  selectedQuote.last,
-                )
-              : '—'}
-          </span>
+        <div className="header-right">
+          {/* Theme & Layout controls */}
+          <button
+            className="toolbar-toggle"
+            onClick={() => setChartLayout(chartLayout === 'SINGLE' ? 'DUAL' : 'SINGLE')}
+            title="Toggle Dual Chart"
+          >
+            {chartLayout === 'SINGLE' ? '▦ Split' : '▢ Single'}
+          </button>
+          <button
+            className="toolbar-toggle"
+            onClick={() => setOrderbookOpen(!orderbookOpen)}
+            title="Toggle Order Book"
+          >
+            📊 Book
+          </button>
+          <button
+            className="toolbar-toggle"
+            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            title="Toggle Theme"
+          >
+            {theme === 'dark' ? '☀' : '◐'}
+          </button>
+          <Link to="/connect-broker" className="connect-link-btn">
+            Brokers ⚙
+          </Link>
         </div>
-
-        <div className="connection-status">
-          <span className="status-dot" />
-          Paper Connected
-        </div>
-
-        <button
-          className="theme-toggle"
-          onClick={() =>
-            setTheme(
-              theme === 'dark'
-                ? 'light'
-                : 'dark',
-            )
-          }
-          aria-label="Toggle dark and light mode"
-          title={
-            theme === 'dark'
-              ? 'Switch to light mode'
-              : 'Switch to dark mode'
-          }
-        >
-          {theme === 'dark'
-            ? '☀'
-            : '◐'}
-        </button>
       </header>
 
-      <main className="terminal-layout">
-        {/* ===================================================
-            DESKTOP WATCHLIST
-            =================================================== */}
+      {/* Notifications Toast */}
+      {trading.lastOrderSuccess && (
+        <div className="notification-toast success">
+          <span>✓</span> {trading.lastOrderSuccess}
+        </div>
+      )}
+      {trading.error && (
+        <div className="notification-toast error">
+          <span>⚠</span> {trading.error}
+        </div>
+      )}
 
-        <aside className="watchlist-panel desktop-watchlist">
-          <div className="panel-heading">
-            <span>
-              Watchlist
-            </span>
-
-            <span className="watchlist-count">
-              {symbols.length}
-            </span>
+      {/* 2. Main Workspace */}
+      <div className="terminal-body">
+        {/* Left Watchlist Drawer / Panel */}
+        <aside className={`watchlist-panel ${watchlistOpen ? 'open' : ''}`}>
+          <div className="watchlist-header">
+            <span>Market Watch</span>
+            <button className="close-watchlist-btn" onClick={() => setWatchlistOpen(false)}>
+              ✕
+            </button>
           </div>
 
-          <div className="watchlist-items">
-            {symbols.map((item) => {
-              const quote =
-                quotes[item]
+          <div className="watchlist-filter-tabs">
+            {(['ALL', 'CRYPTO', 'INDIAN'] as SymbolCategory[]).map((cat) => (
+              <button
+                key={cat}
+                className={`tab-btn ${symbolCategory === cat ? 'active' : ''}`}
+                onClick={() => setSymbolCategory(cat)}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
 
-              const active =
-                item === symbol
+          <div className="watchlist-search">
+            <input
+              type="text"
+              placeholder="Search symbol (e.g. NIFTY, BTC)..."
+              value={searchFilter}
+              onChange={(e) => setSearchFilter(e.target.value)}
+            />
+          </div>
+
+          <div className="watchlist-items-list">
+            {filteredSymbols.map((item) => {
+              const q = quotes[item.symbol]
+              const price = q?.last || item.basePrice
+              const chg = q?.change24h || 0
+              const isActive = symbol === item.symbol
 
               return (
-                <button
-                  key={item}
-                  className={`watchlist-item ${
-                    active
-                      ? 'active'
-                      : ''
-                  }`}
-                  onClick={() =>
-                    selectSymbol(item)
-                  }
+                <div
+                  key={item.symbol}
+                  className={`watchlist-item ${isActive ? 'active' : ''}`}
+                  onClick={() => {
+                    setSymbol(item.symbol)
+                    setWatchlistOpen(false)
+                  }}
                 >
-                  <div className="watch-symbol">
-                    <strong>
-                      {item}
-                    </strong>
-
-                    <span>
-                      Paper
+                  <div className="wl-left">
+                    <span className="wl-symbol">{item.symbol}</span>
+                    <span className="wl-name">{item.name}</span>
+                  </div>
+                  <div className="wl-right">
+                    <span className="wl-price">{formatCurrency(price, item.currency)}</span>
+                    <span className={`wl-change ${chg >= 0 ? 'up' : 'down'}`}>
+                      {chg >= 0 ? `+${chg}%` : `${chg}%`}
                     </span>
                   </div>
-
-                  <div className="watch-price">
-                    <strong>
-                      {quote
-                        ? formatPrice(
-                            quote.last,
-                          )
-                        : '—'}
-                    </strong>
-
-                    <span>
-                      {quote
-                        ? `A ${formatPrice(
-                            quote.ask,
-                          )}`
-                        : '—'}
-                    </span>
-                  </div>
-                </button>
+                </div>
               )
             })}
           </div>
         </aside>
 
-        {/* ===================================================
-            CENTER
-            =================================================== */}
-
-        <section className="terminal-center">
-          {/* =================================================
-              CHART TOOLBAR
-              ================================================= */}
-
+        {/* Center: Interactive Chart & Toolbar */}
+        <div className="center-workspace">
           <div className="chart-toolbar">
-            <div className="chart-symbol-info">
-              <div>
-                <strong>
-                  {symbol}
-                </strong>
-
-                <span>
-                  Spot / Paper
-                </span>
-              </div>
+            <div className="timeframe-list">
+              {TIMEFRAMES.map((tf) => (
+                <button
+                  key={tf}
+                  className={timeframe === tf ? 'active' : ''}
+                  onClick={() => setTimeframe(tf)}
+                >
+                  {tf}
+                </button>
+              ))}
             </div>
-
-            <div className="chart-toolbar-right">
-              <div className="timeframe-list">
-                {timeframes.map(
-                  (item) => (
-                    <button
-                      key={item}
-                      className={
-                        timeframe ===
-                        item
-                          ? 'active'
-                          : ''
-                      }
-                      onClick={() =>
-                        setTimeframe(
-                          item,
-                        )
-                      }
-                    >
-                      {item}
-                    </button>
-                  ),
-                )}
-              </div>
-
-              <button
-                className={`toolbar-toggle ${
-                  chartLayout ===
-                  'DUAL'
-                    ? 'active'
-                    : ''
-                }`}
-                onClick={() =>
-                  setChartLayout(
-                    chartLayout ===
-                      'SINGLE'
-                      ? 'DUAL'
-                      : 'SINGLE',
-                  )
-                }
-                aria-label="Toggle chart layout"
-              >
-                {chartLayout ===
-                'SINGLE'
-                  ? '▦'
-                  : '□'}
-              </button>
-
-              <button
-                className={`toolbar-toggle ${
-                  oneTapMode
-                    ? 'active danger-toggle'
-                    : ''
-                }`}
-                onClick={() =>
-                  setOneTapMode(
-                    !oneTapMode,
-                  )
-                }
-                aria-label="Toggle one tap mode"
-              >
-                1T
-              </button>
-
-              <button
-                className="watchlist-search-button"
-                onClick={() =>
-                  setWatchlistOpen(true)
-                }
-                aria-label="Open watchlist"
-              >
-                ⌕
-              </button>
+            <div className="quick-stats">
+              <span>High: {formatCurrency(selectedQuote?.high24h)}</span>
+              <span>Low: {formatCurrency(selectedQuote?.low24h)}</span>
+              <span>Vol: {selectedQuote?.volume24h?.toLocaleString() || '—'}</span>
             </div>
           </div>
 
-          {/* =================================================
-              CHART AREA
-              ================================================= */}
-
-          <div
-            className={`chart-area ${
-              chartLayout ===
-              'DUAL'
-                ? 'dual-chart-area'
-                : ''
-            }`}
-            onClick={() => {
-              if (
-                watchlistOpen
-              ) {
-                setWatchlistOpen(
-                  false,
-                )
-              }
-            }}
-          >
-            <div className="chart-cell">
-              <Chart
-                symbol={symbol}
-                timeframe={
-                  timeframe
-                }
-              />
+          <div className="chart-area-container">
+            <div className="chart-cell primary">
+              <Chart symbol={symbol} timeframe={timeframe} theme={theme} />
             </div>
-
-            {chartLayout ===
-              'DUAL' && (
-              <div className="chart-cell secondary-chart">
-                <div className="secondary-chart-label">
-                  {secondSymbol}
-                </div>
-
+            {chartLayout === 'DUAL' && (
+              <div className="chart-cell secondary">
                 <Chart
-                  symbol={
-                    secondSymbol
-                  }
-                  timeframe={
-                    timeframe
-                  }
+                  symbol={symbol === 'BTC/USDT' ? 'ETH/USDT' : 'BTC/USDT'}
+                  timeframe="5m"
+                  theme={theme}
                 />
               </div>
             )}
           </div>
+        </div>
 
-          {/* =================================================
-              SCROLLABLE BODY
-              ================================================= */}
-
-          <div className="terminal-scroll-body">
-            {/* =================================================
-                ORDER TYPE
-                ================================================= */}
-
-            <section className="order-settings-card">
-              <div className="order-settings-header">
-                <span>
-                  ORDER TYPE
-                </span>
-
-                <strong>
-                  {orderType.replace(
-                    '_',
-                    ' ',
-                  )}
-                </strong>
-              </div>
-
-              <div className="order-type-buttons">
-                {(
-                  [
-                    'MARKET',
-                    'LIMIT',
-                    'STOP',
-                    'STOP_LIMIT',
-                  ] as OrderType[]
-                ).map(
-                  (type) => (
-                    <button
-                      key={type}
-                      className={
-                        orderType ===
-                        type
-                          ? 'active'
-                          : ''
-                      }
-                      onClick={() =>
-                        changeOrderType(
-                          type,
-                        )
-                      }
-                    >
-                      {type.replace(
-                        '_',
-                        ' ',
-                      )}
-                    </button>
-                  ),
-                )}
-              </div>
-
-              {/* PRICE SETTINGS */}
-
-              {orderType !==
-                'MARKET' && (
-                <div className="price-settings">
-                  {(orderType ===
-                    'STOP' ||
-                    orderType ===
-                      'STOP_LIMIT') && (
-                    <label className="price-field">
-                      <span>
-                        STOP PRICE
-                      </span>
-
-                      <input
-                        type="number"
-                        inputMode="decimal"
-                        min="0"
-                        step="0.01"
-                        value={
-                          stopPrice
-                        }
-                        onChange={(
-                          event,
-                        ) =>
-                          setStopPrice(
-                            event
-                              .target
-                              .value,
-                          )
-                        }
-                        placeholder={
-                          askPrice
-                            ? formatPrice(
-                                askPrice,
-                              )
-                            : '0.00'
-                        }
-                      />
-                    </label>
-                  )}
-
-                  {(orderType ===
-                    'LIMIT' ||
-                    orderType ===
-                      'STOP_LIMIT') && (
-                    <label className="price-field">
-                      <span>
-                        LIMIT PRICE
-                      </span>
-
-                      <input
-                        type="number"
-                        inputMode="decimal"
-                        min="0"
-                        step="0.01"
-                        value={
-                          limitPrice
-                        }
-                        onChange={(
-                          event,
-                        ) =>
-                          setLimitPrice(
-                            event
-                              .target
-                              .value,
-                          )
-                        }
-                        placeholder={
-                          askPrice
-                            ? formatPrice(
-                                askPrice,
-                              )
-                            : '0.00'
-                        }
-                      />
-                    </label>
-                  )}
-                </div>
-              )}
-            </section>
-
-            {/* =================================================
-                CALCULATIONS
-                ================================================= */}
-
-            <div className="trade-stats-row">
-              <div className="trade-stat">
-                <span>
-                  Quantity
-                </span>
-
-                <strong>
-                  {formatNumber(
-                    estimatedQuantity,
-                  )}
-                </strong>
-              </div>
-
-              <div className="trade-stat">
-                <span>
-                  BUY Value
-                </span>
-
-                <strong>
-                  {formatPrice(
-                    buyNotional,
-                  )}
-                </strong>
-              </div>
-
-              <div className="trade-stat">
-                <span>
-                  SELL Value
-                </span>
-
-                <strong>
-                  {formatPrice(
-                    sellNotional,
-                  )}
-                </strong>
-              </div>
-
-              <div className="trade-stat">
-                <span>
-                  Initial Margin
-                </span>
-
-                <strong>
-                  {formatPrice(
-                    buyInitialMargin,
-                  )}
-                </strong>
-              </div>
-
-              <div className="trade-stat">
-                <span>
-                  Est. Fee
-                </span>
-
-                <strong>
-                  {formatPrice(
-                    buyEstimatedFee,
-                  )}
-                </strong>
-              </div>
-
-              <div className="trade-stat">
-                <span>
-                  Available
-                </span>
-
-                <strong>
-                  ₹
-                  {availableBalance.toLocaleString(
-                    undefined,
-                    {
-                      maximumFractionDigits:
-                        2,
-                    },
-                  )}
-                </strong>
-              </div>
-
-              <div className="trade-stat">
-                <span>
-                  Est. Liq.
-                </span>
-
-                <strong>
-                  —
-                </strong>
-              </div>
+        {/* Optional Live Order Book Depth */}
+        {orderbookOpen && (
+          <div className="orderbook-panel">
+            <div className="orderbook-header">
+              <span>Order Book</span>
+              <span className="spread-label">
+                Spread: {(askPrice - bidPrice).toFixed(currentSymbolInfo.decimals)}
+              </span>
             </div>
 
-            {/* =================================================
-                POSITIONS / ORDERS / JOURNAL
-                ================================================= */}
-
-            <section className="terminal-bottom">
-              <div className="bottom-tabs">
-                {[
-                  'Positions',
-                  'Orders',
-                  'Journal',
-                ].map((tab) => (
-                  <button
-                    key={tab}
-                    className={
-                      activeTab ===
-                      tab
-                        ? 'active'
-                        : ''
-                    }
-                    onClick={() =>
-                      setActiveTab(
-                        tab,
-                      )
-                    }
-                  >
-                    {tab}
-                  </button>
+            <div className="orderbook-table">
+              {/* Asks (Red) */}
+              <div className="asks-section">
+                {orderBook.asks?.slice(0, 5).map((ask, i) => (
+                  <div key={`ask-${i}`} className="ob-row ask">
+                    <span className="ob-price">{ask.price}</span>
+                    <span className="ob-qty">{ask.quantity}</span>
+                    <div
+                      className="ob-bar red"
+                      style={{ width: `${Math.min(100, (ask.quantity / 5) * 100)}%` }}
+                    />
+                  </div>
                 ))}
               </div>
 
-              <div className="bottom-content">
-                {activeTab ===
-                  'Positions' && (
-                  trading.positions.length === 0 ? (
-                    <div className="empty-state">
-                      <div className="empty-state-title">
-                        No active positions
-                      </div>
-
-                      <div className="empty-state-subtitle">
-                        Your open positions
-                        will appear here.
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="positions-table">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>Symbol</th>
-                            <th>Side</th>
-                            <th>Quantity</th>
-                            <th>Entry Price</th>
-                            <th>Current Price</th>
-                            <th>P&L</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {trading.positions.map((pos, idx) => (
-                            <tr key={idx}>
-                              <td><strong>{pos.symbol}</strong></td>
-                              <td className={pos.side === 'LONG' ? 'buy-side' : 'sell-side'}>
-                                {pos.side}
-                              </td>
-                              <td>{formatNumber(pos.quantity)}</td>
-                              <td>{formatPrice(pos.entryPrice)}</td>
-                              <td>{formatPrice(pos.currentPrice)}</td>
-                              <td className={pos.pnl >= 0 ? 'profit' : 'loss'}>
-                                {pos.pnl >= 0 ? '+' : ''}{formatPrice(pos.pnl)}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )
-                )}
-
-                {activeTab ===
-                  'Orders' && (
-                  trading.orderHistory.length === 0 ? (
-                    <div className="empty-state">
-                      <div className="empty-state-title">
-                        No orders
-                      </div>
-
-                      <div className="empty-state-subtitle">
-                        Order history will
-                        appear here.
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="orders-table">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>Time</th>
-                            <th>Symbol</th>
-                            <th>Side</th>
-                            <th>Type</th>
-                            <th>Quantity</th>
-                            <th>Price</th>
-                            <th>Status</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {trading.orderHistory.slice().reverse().map((order) => (
-                            <tr key={order.id}>
-                              <td>{new Date(order.timestamp).toLocaleTimeString()}</td>
-                              <td><strong>{order.symbol}</strong></td>
-                              <td className={order.side === 'BUY' ? 'buy-side' : 'sell-side'}>
-                                {order.side}
-                              </td>
-                              <td>{order.type}</td>
-                              <td>{formatNumber(order.filledQuantity)}</td>
-                              <td>{order.price ? formatPrice(order.price) : '—'}</td>
-                              <td className={`status-${order.status.toLowerCase()}`}>
-                                {order.status}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )
-                )}
-
-                {activeTab ===
-                  'Journal' && (
-                  <div className="empty-state">
-                    <div className="empty-state-title">
-                      Your journal is empty
-                    </div>
-
-                    <div className="empty-state-subtitle">
-                      Trading activity and
-                      notes will appear here.
-                    </div>
-                  </div>
-                )}
+              {/* Mid Market Price */}
+              <div className="ob-mid-price">
+                <span className="mid-val">{formatCurrency(currentPrice)}</span>
               </div>
-            </section>
+
+              {/* Bids (Green) */}
+              <div className="bids-section">
+                {orderBook.bids?.slice(0, 5).map((bid, i) => (
+                  <div key={`bid-${i}`} className="ob-row bid">
+                    <span className="ob-price">{bid.price}</span>
+                    <span className="ob-qty">{bid.quantity}</span>
+                    <div
+                      className="ob-bar green"
+                      style={{ width: `${Math.min(100, (bid.quantity / 5) * 100)}%` }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Right: Fast Order Execution & Scalping Panel */}
+        <aside className="trade-panel">
+          <div className="trade-panel-header">
+            <span>Fast Execution</span>
+            <div className="scalp-toggle">
+              <label>1-Tap</label>
+              <input
+                type="checkbox"
+                checked={oneTapMode}
+                onChange={(e) => setOneTapMode(e.target.checked)}
+              />
+            </div>
           </div>
 
-          {/* =================================================
-              EXECUTION BAR
-              ONLY BUY / SIZE / SELL / LEV
-              ================================================= */}
-
-          <section
-            className="trade-panel"
-            onClick={(event) =>
-              event.stopPropagation()
-            }
-          >
-            <div className="trade-main-row">
-              {/* BUY */}
-
+          {/* Order Types */}
+          <div className="order-type-buttons">
+            {(['MARKET', 'LIMIT', 'STOP', 'STOP_LIMIT'] as OrderType[]).map((type) => (
               <button
-                className="trade-side-button buy"
-                onClick={() => executeTrade('BUY')}
-                disabled={trading.isExecuting || estimatedQuantity <= 0}
-                aria-label={`Buy at ask ${formatPrice(
-                  askPrice,
-                )}`}
+                key={type}
+                className={orderType === type ? 'active' : ''}
+                onClick={() => setOrderType(type)}
               >
-                <strong>
-                  {trading.isExecuting ? '...' : formatPrice(
-                    askPrice,
-                  )}
-                </strong>
+                {type.replace('_', ' ')}
               </button>
+            ))}
+          </div>
 
-              {/* SIZE */}
-
-              <div className="size-control">
-                <div className="size-input-row">
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={size}
-                    onChange={(event) =>
-                      setSize(
-                        event.target
-                          .value,
-                      )
-                    }
-                    aria-label="Order size"
-                  />
-
-                  <select
-                    value={
-                      sizeMode
-                    }
-                    onChange={(
-                      event,
-                    ) =>
-                      setSizeMode(
-                        event.target
-                          .value as SizeMode,
-                      )
-                    }
-                    aria-label="Size unit"
-                  >
-                    <option value="LOT">
-                      LOT
-                    </option>
-
-                    <option value="QUANTITY">
-                      QTY
-                    </option>
-
-                    <option value="MARGIN">
-                      MGN
-                    </option>
-                  </select>
-                </div>
-              </div>
-
-              {/* SELL */}
-
-              <button
-                className="trade-side-button sell"
-                onClick={() => executeTrade('SELL')}
-                disabled={trading.isExecuting || estimatedQuantity <= 0}
-                aria-label={`Sell at bid ${formatPrice(
-                  bidPrice,
-                )}`}
-              >
-                <strong>
-                  {trading.isExecuting ? '...' : formatPrice(
-                    bidPrice,
-                  )}
-                </strong>
-              </button>
-
-              {/* LEVERAGE */}
-
-              <button
-                className={`trade-leverage-button ${leverageRisk}`}
-                onClick={
-                  openLeverageEditor
-                }
-                aria-label="Edit leverage"
-              >
-                <strong>
-                  {leverage}x
-                </strong>
-              </button>
-            </div>
-
-            <div className="trade-footer">
-              <span>
-                Leverage:{' '}
-                <strong>
-                  {leverage}x
-                </strong>
-              </span>
-
-              <span>
-                Mode:{' '}
-                <strong>
-                  Isolated
-                </strong>
-              </span>
-
-              <span>
-                Order:{' '}
-                <strong>
-                  {orderType}
-                </strong>
-              </span>
-
-              <span
-                className={`one-tap-status ${
-                  oneTapMode
-                    ? 'enabled'
-                    : ''
-                }`}
-              >
-                1-Tap:{' '}
-                <strong>
-                  {oneTapMode
-                    ? 'ON'
-                    : 'OFF'}
-                </strong>
-              </span>
-
-              <span className="risk-note">
-                Paper execution only
-              </span>
-            </div>
-          </section>
-        </section>
-      </main>
-
-      {/* =====================================================
-          WATCHLIST DRAWER
-          ===================================================== */}
-
-      {watchlistOpen && (
-        <div
-          className="watchlist-overlay"
-          onClick={() =>
-            setWatchlistOpen(false)
-          }
-        >
-          <aside
-            className="watchlist-drawer"
-            onClick={(event) =>
-              event.stopPropagation()
-            }
-          >
-            <div className="drawer-header">
-              <strong>
-                Watchlist
-              </strong>
-
-              <button
-                onClick={() =>
-                  setWatchlistOpen(
-                    false,
-                  )
-                }
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="drawer-items">
-              {symbols.map(
-                (item) => {
-                  const quote =
-                    quotes[item]
-
-                  const active =
-                    item ===
-                    symbol
-
-                  return (
-                    <button
-                      key={item}
-                      className={`drawer-symbol ${
-                        active
-                          ? 'active'
-                          : ''
-                      }`}
-                      onClick={() =>
-                        selectSymbol(
-                          item,
-                        )
-                      }
-                    >
-                      <div>
-                        <strong>
-                          {item}
-                        </strong>
-
-                        <span>
-                          {quote
-                            ? formatPrice(
-                                quote.last,
-                              )
-                            : '—'}
-                        </span>
-                      </div>
-
-                      <div>
-                        <small>
-                          ASK
-                        </small>
-
-                        <strong>
-                          {quote
-                            ? formatPrice(
-                                quote.ask,
-                              )
-                            : '—'}
-                        </strong>
-                      </div>
-                    </button>
-                  )
-                },
-              )}
-            </div>
-          </aside>
-        </div>
-      )}
-
-      {/* =====================================================
-          LEVERAGE MODAL
-          ===================================================== */}
-
-      {leverageEditorOpen && (
-        <div
-          className="leverage-modal-overlay"
-          onClick={() => {
-            if (
-              pendingHighLeverage ===
-              null
-            ) {
-              closeLeverageEditor()
-            }
-          }}
-        >
-          <div
-            className="leverage-modal"
-            onClick={(event) =>
-              event.stopPropagation()
-            }
-          >
-            <div className="leverage-modal-header">
-              <strong>
-                Set Leverage
-              </strong>
-
-              <button
-                onClick={
-                  closeLeverageEditor
-                }
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="leverage-input-label">
-              Leverage
-            </div>
-
-            <div className="leverage-input-wrap">
+          {/* Price inputs if limit or stop */}
+          {(orderType === 'LIMIT' || orderType === 'STOP_LIMIT') && (
+            <div className="price-field">
+              <label>Limit Price</label>
               <input
-                autoFocus
                 type="number"
-                min="1"
-                max="100"
-                step="0.1"
-                value={
-                  leverageInput
-                }
-                onChange={(event) =>
-                  setLeverageInput(
-                    event.target
-                      .value,
-                  )
-                }
-                onKeyDown={(event) => {
-                  if (
-                    event.key ===
-                    'Enter'
-                  ) {
-                    requestLeverageChange()
-                  }
-
-                  if (
-                    event.key ===
-                    'Escape'
-                  ) {
-                    closeLeverageEditor()
-                  }
-                }}
+                placeholder={currentPrice.toString()}
+                value={limitPrice}
+                onChange={(e) => setLimitPrice(e.target.value)}
               />
-
-              <span>
-                x
-              </span>
             </div>
+          )}
 
-            {pendingHighLeverage !==
-              null && (
-              <div className="high-leverage-warning">
-                <div className="warning-icon">
-                  !
-                </div>
+          {(orderType === 'STOP' || orderType === 'STOP_LIMIT') && (
+            <div className="price-field">
+              <label>Stop Trigger Price</label>
+              <input
+                type="number"
+                placeholder={currentPrice.toString()}
+                value={stopPrice}
+                onChange={(e) => setStopPrice(e.target.value)}
+              />
+            </div>
+          )}
 
-                <div className="warning-content">
-                  <strong>
-                    High leverage
-                  </strong>
-
-                  <p>
-                    {pendingHighLeverage}x
-                    increases
-                    liquidation
-                    sensitivity.
-                  </p>
-                </div>
-
+          {/* Size Controls */}
+          <div className="size-control-group">
+            <div className="size-header">
+              <label>Order Size</label>
+              <div className="size-mode-selector">
                 <button
-                  className="acknowledge-warning"
-                  onClick={
-                    acknowledgeAndApplyHighLeverage
-                  }
+                  className={sizeMode === 'LOT' ? 'active' : ''}
+                  onClick={() => setSizeMode('LOT')}
                 >
-                  I Understand
+                  LOT
+                </button>
+                <button
+                  className={sizeMode === 'QTY' ? 'active' : ''}
+                  onClick={() => setSizeMode('QTY')}
+                >
+                  QTY
+                </button>
+                <button
+                  className={sizeMode === 'PERCENT' ? 'active' : ''}
+                  onClick={() => setSizeMode('PERCENT')}
+                >
+                  %
                 </button>
               </div>
-            )}
+            </div>
 
-            {pendingHighLeverage ===
-              null && (
+            <div className="size-input-wrapper">
+              <input
+                type="number"
+                step="any"
+                value={size}
+                onChange={(e) => setSize(e.target.value)}
+                placeholder="0.1"
+              />
+              <span className="size-unit">
+                {sizeMode === 'PERCENT' ? '%' : currentSymbolInfo.symbol.split('/')[0]}
+              </span>
+            </div>
+
+            {/* Quick Scalp Presets */}
+            <div className="scalp-presets">
+              {sizeMode === 'PERCENT'
+                ? [25, 50, 75, 100].map((pct) => (
+                    <button key={pct} onClick={() => setSize(pct.toString())}>
+                      {pct}%
+                    </button>
+                  ))
+                : [0.01, 0.1, 0.5, 1.0, 5.0].map((val) => (
+                    <button key={val} onClick={() => setSize(val.toString())}>
+                      {val}
+                    </button>
+                  ))}
+            </div>
+          </div>
+
+          {/* Leverage Selector */}
+          <div className="leverage-control-card">
+            <div className="leverage-row">
+              <span>Leverage</span>
               <button
-                className="apply-leverage"
-                onClick={
-                  requestLeverageChange
-                }
+                className="leverage-badge-btn"
+                onClick={() => setLeverageEditorOpen(!leverageEditorOpen)}
               >
-                Apply
+                {leverage}x ⚡
               </button>
+            </div>
+            {leverageEditorOpen && (
+              <div className="leverage-slider-box">
+                <input
+                  type="range"
+                  min="1"
+                  max="100"
+                  value={leverage}
+                  onChange={(e) => setLeverage(parseInt(e.target.value, 10))}
+                />
+                <div className="leverage-quick-picks">
+                  {[1, 3, 5, 10, 20, 50, 100].map((lev) => (
+                    <button
+                      key={lev}
+                      className={leverage === lev ? 'active' : ''}
+                      onClick={() => setLeverage(lev)}
+                    >
+                      {lev}x
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
+
+          {/* Margin & Notional Estimation Summary */}
+          <div className="order-summary-box">
+            <div className="summary-row">
+              <span>Est. Qty:</span>
+              <strong>{computedQuantity.toFixed(4)}</strong>
+            </div>
+            <div className="summary-row">
+              <span>Req. Margin:</span>
+              <strong>{formatCurrency(requiredMargin)}</strong>
+            </div>
+            <div className="summary-row">
+              <span>Est. Liq Price:</span>
+              <strong className="liq-text">
+                {formatCurrency(
+                  currentPrice * (1 - (1 / leverage) * 0.9),
+                )}
+              </strong>
+            </div>
+          </div>
+
+          {/* Big Buy & Sell Buttons */}
+          <div className="execution-buttons-grid">
+            <button
+              className="exec-btn buy"
+              onClick={() => handleExecute('BUY')}
+              disabled={trading.isExecuting}
+            >
+              <div className="btn-side">BUY / LONG</div>
+              <div className="btn-price">{formatCurrency(askPrice)}</div>
+            </button>
+
+            <button
+              className="exec-btn sell"
+              onClick={() => handleExecute('SELL')}
+              disabled={trading.isExecuting}
+            >
+              <div className="btn-side">SELL / SHORT</div>
+              <div className="btn-price">{formatCurrency(bidPrice)}</div>
+            </button>
+          </div>
+        </aside>
+      </div>
+
+      {/* 3. Bottom Management Console */}
+      <footer className="terminal-bottom">
+        <div className="bottom-tabs-bar">
+          {(['Positions', 'Orders', 'History', 'Journal', 'Balances'] as BottomTab[]).map(
+            (tab) => {
+              let count = ''
+              if (tab === 'Positions') count = ` (${trading.positions.length})`
+              if (tab === 'Orders') count = ` (${trading.orders.length})`
+              if (tab === 'History') count = ` (${trading.orderHistory.length})`
+              if (tab === 'Journal') count = ` (${trading.journal.length})`
+
+              return (
+                <button
+                  key={tab}
+                  className={`tab-link ${activeTab === tab ? 'active' : ''}`}
+                  onClick={() => setActiveTab(tab)}
+                >
+                  {tab}
+                  <span className="tab-count">{count}</span>
+                </button>
+              )
+            },
+          )}
         </div>
-      )}
+
+        <div className="bottom-content-area">
+          {/* Positions Table */}
+          {activeTab === 'Positions' && (
+            <div className="positions-table-wrap">
+              {trading.positions.length === 0 ? (
+                <div className="empty-state-msg">No active open positions</div>
+              ) : (
+                <table className="terminal-data-table">
+                  <thead>
+                    <tr>
+                      <th>Symbol</th>
+                      <th>Side</th>
+                      <th>Size</th>
+                      <th>Entry Price</th>
+                      <th>Mark Price</th>
+                      <th>Margin</th>
+                      <th>Liq Price</th>
+                      <th>Unrealized P&L</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {trading.positions.map((pos, idx) => (
+                      <tr key={`${pos.symbol}-${idx}`}>
+                        <td className="bold-cell">{pos.symbol}</td>
+                        <td>
+                          <span className={`side-badge ${pos.side.toLowerCase()}`}>
+                            {pos.side} {pos.leverage ? `${pos.leverage}x` : ''}
+                          </span>
+                        </td>
+                        <td>{pos.quantity}</td>
+                        <td>{formatCurrency(pos.entryPrice)}</td>
+                        <td>{formatCurrency(pos.currentPrice)}</td>
+                        <td>{formatCurrency(pos.margin)}</td>
+                        <td className="warning-text">{formatCurrency(pos.liquidationPrice)}</td>
+                        <td className={`pnl-cell ${pos.pnl >= 0 ? 'profit' : 'loss'}`}>
+                          {pos.pnl >= 0 ? `+${formatCurrency(pos.pnl)}` : formatCurrency(pos.pnl)} (
+                          {pos.pnlPercentage ? `${pos.pnlPercentage}%` : '0%'})
+                        </td>
+                        <td>
+                          <button
+                            className="close-pos-btn"
+                            onClick={() => handleClosePosition(pos.symbol)}
+                            disabled={trading.isExecuting}
+                          >
+                            Close
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+
+          {/* Open Orders Table */}
+          {activeTab === 'Orders' && (
+            <div className="orders-table-wrap">
+              {trading.orders.length === 0 ? (
+                <div className="empty-state-msg">No open pending orders</div>
+              ) : (
+                <table className="terminal-data-table">
+                  <thead>
+                    <tr>
+                      <th>Order ID</th>
+                      <th>Symbol</th>
+                      <th>Side</th>
+                      <th>Type</th>
+                      <th>Quantity</th>
+                      <th>Trigger Price</th>
+                      <th>Status</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {trading.orders.map((ord) => (
+                      <tr key={ord.id}>
+                        <td>{ord.id}</td>
+                        <td className="bold-cell">{ord.symbol}</td>
+                        <td>
+                          <span className={`side-badge ${ord.side.toLowerCase()}`}>
+                            {ord.side}
+                          </span>
+                        </td>
+                        <td>{ord.type}</td>
+                        <td>{ord.quantity}</td>
+                        <td>{formatCurrency(ord.price)}</td>
+                        <td>{ord.status}</td>
+                        <td>
+                          <button
+                            className="cancel-ord-btn"
+                            onClick={() => handleCancelOrder(ord.id)}
+                          >
+                            Cancel
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+
+          {/* Order History */}
+          {activeTab === 'History' && (
+            <div className="history-table-wrap">
+              {trading.orderHistory.length === 0 ? (
+                <div className="empty-state-msg">No executed trades yet</div>
+              ) : (
+                <table className="terminal-data-table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Symbol</th>
+                      <th>Side</th>
+                      <th>Type</th>
+                      <th>Qty</th>
+                      <th>Exec Price</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {trading.orderHistory.map((item) => (
+                      <tr key={item.id}>
+                        <td>{new Date(item.timestamp).toLocaleTimeString()}</td>
+                        <td className="bold-cell">{item.symbol}</td>
+                        <td>
+                          <span className={`side-badge ${item.side.toLowerCase()}`}>
+                            {item.side}
+                          </span>
+                        </td>
+                        <td>{item.type}</td>
+                        <td>{item.quantity}</td>
+                        <td>{formatCurrency(item.price)}</td>
+                        <td>
+                          <span className={`status-pill ${item.status.toLowerCase()}`}>
+                            {item.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+
+          {/* Trade Journal */}
+          {activeTab === 'Journal' && (
+            <div className="journal-table-wrap">
+              {trading.journal.length === 0 ? (
+                <div className="empty-state-msg">
+                  Trades executed in this session will auto-log here for performance journaling.
+                </div>
+              ) : (
+                <table className="terminal-data-table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Broker</th>
+                      <th>Symbol</th>
+                      <th>Action</th>
+                      <th>Size</th>
+                      <th>Fill Price</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {trading.journal.map((j) => (
+                      <tr key={j.id}>
+                        <td>{new Date(j.timestamp).toLocaleTimeString()}</td>
+                        <td>{j.broker}</td>
+                        <td className="bold-cell">{j.symbol}</td>
+                        <td>
+                          <span className={`side-badge ${j.side.toLowerCase()}`}>{j.side}</span>
+                        </td>
+                        <td>{j.quantity}</td>
+                        <td>{formatCurrency(j.price)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+
+          {/* Balances / Wallet */}
+          {activeTab === 'Balances' && (
+            <div className="balances-card-grid">
+              {trading.balances.map((b, idx) => (
+                <div key={idx} className="balance-metric-card">
+                  <div className="metric-asset">{b.asset}</div>
+                  <div className="metric-main-val">{formatCurrency(b.total)}</div>
+                  <div className="metric-sub-row">
+                    <span>Available: <strong>{formatCurrency(b.available)}</strong></span>
+                    <span>Locked Margin: <strong>{formatCurrency(b.locked)}</strong></span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </footer>
     </div>
   )
 }

@@ -1,243 +1,202 @@
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
 
-import { getBroker } from './BrokerFactory'
-import { PaperMarketDataProvider } from './market-data/PaperMarketDataProvider'
+import { BrokerId, OrderRequest } from './BrokerAdapter'
+import { getBroker, listBrokers, sharedMarketData } from './BrokerFactory'
 
 const app = Fastify({
-  logger: true,
+  logger: false,
 })
-
-const paperMarketData =
-  new PaperMarketDataProvider()
-
-const paperBroker = getBroker('paper')
 
 await app.register(cors, {
   origin: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
 })
 
+// 1. Health check
 app.get('/api/health', async () => {
   return {
     status: 'ok',
     service: 'Bountiful Trading Terminal Backend',
-    version: 'DEPLOY-TEST-001',
+    version: '2.0.0-PRO',
+    time: Date.now(),
   }
 })
 
-app.get('/api/brokers/paper', async () => {
-  const broker = getBroker('paper')
+// 2. Broker Management
+app.get('/api/brokers', async () => {
+  return listBrokers()
+})
 
-  await broker.connect()
+app.post('/api/broker/connect', async (request, reply) => {
+  const body = request.body as { broker: BrokerId; credentials?: Record<string, string> }
+  if (!body?.broker) {
+    return reply.status(400).send({ error: 'broker parameter is required' })
+  }
 
-  const account = await broker.getAccount()
-
-  return {
-    broker: broker.name,
-    account,
+  try {
+    const broker = getBroker(body.broker)
+    await broker.connect(body.credentials)
+    const account = await broker.getAccount()
+    return { success: true, account }
+  } catch (err: any) {
+    return reply.status(500).send({ error: err.message })
   }
 })
 
-app.get('/api/market-data/paper', async (request: any) => {
-  const { symbol = 'BTC/USDT', timeframe = '1m' } =
-    request.query as {
-      symbol?: string
-      timeframe?: string
-    }
-
-  const quote =
-    await paperMarketData.getQuote(symbol)
-
-  const candles =
-    await paperMarketData.getCandles(
-      symbol,
-      timeframe,
-      100,
-    )
-
-  return {
-    quote,
-    candles,
+// 3. Market Data Endpoints
+app.get('/api/quote', async (request, reply) => {
+  const { symbol = 'BTC/USDT' } = request.query as { symbol?: string }
+  try {
+    const quote = await sharedMarketData.getQuote(symbol)
+    return quote
+  } catch (err: any) {
+    return reply.status(500).send({ error: err.message })
   }
 })
 
-app.get('/api/quote/paper', async (request: any) => {
-  const { symbol = 'BTC/USDT' } =
-    request.query as {
-      symbol?: string
-    }
-
-  const quote =
-    await paperMarketData.getQuote(symbol)
-
-  return quote
-})
-
-app.get('/api/candle/paper', async (request: any) => {
-  const { symbol = 'BTC/USDT', timeframe = '1m' } =
-    request.query as {
-      symbol?: string
-      timeframe?: string
-    }
-
-  const candles =
-    await paperMarketData.getCandles(
-      symbol,
-      timeframe,
-      1,
-    )
-
-  return candles[0]
-})
-
-// Place order
-app.post('/api/order/paper', async (request: any) => {
-  const orderRequest = request.body
-
-  await paperBroker.connect()
-  const order = await paperBroker.placeOrder(orderRequest)
-
-  return {
-    success: true,
-    order,
+app.get('/api/orderbook', async (request, reply) => {
+  const { symbol = 'BTC/USDT' } = request.query as { symbol?: string }
+  try {
+    const book = sharedMarketData.getOrderBook(symbol)
+    return book
+  } catch (err: any) {
+    return reply.status(500).send({ error: err.message })
   }
 })
 
-// Get positions
-app.get('/api/positions/paper', async () => {
-  await paperBroker.connect()
-  const positions = await paperBroker.getPositions()
+app.get('/api/candles', async (request, reply) => {
+  const { symbol = 'BTC/USDT', timeframe = '1m', limit = '120' } = request.query as {
+    symbol?: string
+    timeframe?: string
+    limit?: string
+  }
 
-  return {
-    success: true,
-    positions,
+  try {
+    const candles = await sharedMarketData.getCandles(symbol, timeframe, parseInt(limit, 10) || 120)
+    return candles
+  } catch (err: any) {
+    return reply.status(500).send({ error: err.message })
   }
 })
 
-// Get open orders
-app.get('/api/orders/paper', async () => {
-  await paperBroker.connect()
-  const orders = await paperBroker.getOpenOrders()
+// 4. Broker Order & Position Routes
+app.post('/api/order/:broker', async (request, reply) => {
+  const { broker = 'paper' } = request.params as { broker: BrokerId }
+  const orderData = request.body as OrderRequest
 
-  return {
-    success: true,
-    orders,
+  if (!orderData?.symbol || !orderData?.side || !orderData?.type || !orderData?.quantity) {
+    return reply.status(400).send({ error: 'Missing required order fields (symbol, side, type, quantity)' })
+  }
+
+  try {
+    const brokerAdapter = getBroker(broker)
+    const order = await brokerAdapter.placeOrder(orderData)
+    return { success: true, order }
+  } catch (err: any) {
+    return reply.status(500).send({ error: err.message })
   }
 })
 
-// Get order history
-app.get('/api/orders/paper/history', async () => {
-  await paperBroker.connect()
-  const orders = await paperBroker.getOrderHistory()
+app.post('/api/position/close/:broker', async (request, reply) => {
+  const { broker = 'paper' } = request.params as { broker: BrokerId }
+  const { symbol } = request.body as { symbol: string }
 
-  return {
-    success: true,
-    orders,
+  if (!symbol) {
+    return reply.status(400).send({ error: 'symbol is required to close position' })
+  }
+
+  try {
+    const brokerAdapter = getBroker(broker)
+    const order = await brokerAdapter.closePosition(symbol)
+    return { success: true, order }
+  } catch (err: any) {
+    return reply.status(500).send({ error: err.message })
   }
 })
 
-// Get balances
-app.get('/api/balances/paper', async () => {
-  await paperBroker.connect()
-  const balances = await paperBroker.getBalances()
+app.post('/api/order/cancel/:broker', async (request, reply) => {
+  const { broker = 'paper' } = request.params as { broker: BrokerId }
+  const { orderId } = request.body as { orderId: string }
 
-  return {
-    success: true,
-    balances,
+  if (!orderId) {
+    return reply.status(400).send({ error: 'orderId is required' })
+  }
+
+  try {
+    const brokerAdapter = getBroker(broker)
+    await brokerAdapter.cancelOrder(orderId)
+    return { success: true, orderId }
+  } catch (err: any) {
+    return reply.status(500).send({ error: err.message })
   }
 })
 
-// Cancel order
-app.delete('/api/order/paper/:orderId', async (request: any) => {
-  const { orderId } = request.params
-
-  await paperBroker.connect()
-  await paperBroker.cancelOrder(orderId)
-
-  return {
-    success: true,
-    message: 'Order cancelled',
+app.get('/api/positions/:broker', async (request, reply) => {
+  const { broker = 'paper' } = request.params as { broker: BrokerId }
+  try {
+    const brokerAdapter = getBroker(broker)
+    const positions = await brokerAdapter.getPositions()
+    return positions
+  } catch (err: any) {
+    return reply.status(500).send({ error: err.message })
   }
 })
 
-// Order Placement
-app.post('/api/orders/paper', async (request: any) => {
-  const orderRequest = request.body
-
-  await paperBroker.connect()
-  const order = await paperBroker.placeOrder(orderRequest)
-
-  return {
-    success: true,
-    order,
+app.get('/api/orders/:broker', async (request, reply) => {
+  const { broker = 'paper' } = request.params as { broker: BrokerId }
+  try {
+    const brokerAdapter = getBroker(broker)
+    const orders = await brokerAdapter.getOpenOrders()
+    return orders
+  } catch (err: any) {
+    return reply.status(500).send({ error: err.message })
   }
 })
 
-// Get Positions
-app.get('/api/positions/paper', async () => {
-  await paperBroker.connect()
-  const positions = await paperBroker.getPositions()
-
-  return {
-    positions,
+app.get('/api/history/:broker', async (request, reply) => {
+  const { broker = 'paper' } = request.params as { broker: BrokerId }
+  try {
+    const brokerAdapter = getBroker(broker)
+    const history = await brokerAdapter.getOrderHistory()
+    return history
+  } catch (err: any) {
+    return reply.status(500).send({ error: err.message })
   }
 })
 
-// Get Open Orders
-app.get('/api/orders/paper', async () => {
-  await paperBroker.connect()
-  const orders = await paperBroker.getOpenOrders()
-
-  return {
-    orders,
+app.get('/api/balances/:broker', async (request, reply) => {
+  const { broker = 'paper' } = request.params as { broker: BrokerId }
+  try {
+    const brokerAdapter = getBroker(broker)
+    const balances = await brokerAdapter.getBalances()
+    return balances
+  } catch (err: any) {
+    return reply.status(500).send({ error: err.message })
   }
 })
 
-// Get Order History
-app.get('/api/orders/paper/history', async () => {
-  await paperBroker.connect()
-  const orders = await paperBroker.getOrderHistory()
-
-  return {
-    orders,
+app.get('/api/account/:broker', async (request, reply) => {
+  const { broker = 'paper' } = request.params as { broker: BrokerId }
+  try {
+    const brokerAdapter = getBroker(broker)
+    const account = await brokerAdapter.getAccount()
+    return account
+  } catch (err: any) {
+    return reply.status(500).send({ error: err.message })
   }
 })
 
-// Get Balances
-app.get('/api/balances/paper', async () => {
-  await paperBroker.connect()
-  const balances = await paperBroker.getBalances()
-
-  return {
-    balances,
+const start = async () => {
+  try {
+    const port = Number(process.env.PORT) || 3000
+    const host = '0.0.0.0'
+    await app.listen({ port, host })
+    console.log(`Backend server ready and running at http://${host}:${port}`)
+  } catch (err) {
+    console.error('Failed to start server:', err)
+    process.exit(1)
   }
-})
-
-// Cancel Order
-app.delete('/api/orders/paper/:orderId', async (request: any) => {
-  const { orderId } = request.params
-
-  await paperBroker.connect()
-  await paperBroker.cancelOrder(orderId)
-
-  return {
-    success: true,
-  }
-})
-
-const port = Number(process.env.PORT) || 3000
-const host = process.env.HOST || '0.0.0.0'
-
-try {
-  await app.listen({
-    port,
-    host,
-  })
-
-  console.log(
-    `Backend running on http://${host}:${port}`,
-  )
-} catch (error) {
-  app.log.error(error)
-  process.exit(1)
 }
+
+start()

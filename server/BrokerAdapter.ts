@@ -24,6 +24,23 @@ export interface Quote {
   bid: number
   ask: number
   last: number
+  high24h?: number
+  low24h?: number
+  change24h?: number
+  volume24h?: number
+  timestamp: number
+}
+
+export interface OrderBookEntry {
+  price: number
+  quantity: number
+  total: number
+}
+
+export interface OrderBook {
+  symbol: string
+  bids: OrderBookEntry[]
+  asks: OrderBookEntry[]
   timestamp: number
 }
 
@@ -34,6 +51,10 @@ export interface Position {
   entryPrice: number
   currentPrice: number
   pnl: number
+  pnlPercentage: number
+  leverage?: number
+  margin?: number
+  liquidationPrice?: number
 }
 
 export interface OrderRequest {
@@ -42,6 +63,8 @@ export interface OrderRequest {
   type: OrderType
   quantity: number
   price?: number
+  stopPrice?: number
+  leverage?: number
 }
 
 export interface Order {
@@ -52,6 +75,7 @@ export interface Order {
   quantity: number
   filledQuantity: number
   price?: number
+  stopPrice?: number
   status: OrderStatus
   timestamp: number
 }
@@ -59,12 +83,17 @@ export interface Order {
 export interface Account {
   id: string
   name: string
+  broker: BrokerId
+  currency: string
+  connected: boolean
+  isDemo?: boolean
 }
 
 export interface Balance {
   asset: string
   available: number
   locked: number
+  total: number
 }
 
 export interface BrokerCapabilities {
@@ -72,23 +101,27 @@ export interface BrokerCapabilities {
   futures: boolean
   options: boolean
   shortSelling: boolean
+  leverageMax: number
+  supportedMarkets: ('CRYPTO' | 'EQUITY' | 'F&O')[]
 }
 
 export interface BrokerAdapter {
   id: BrokerId
   name: string
   capabilities: BrokerCapabilities
+  connected: boolean
 
-  connect(): Promise<void>
+  connect(credentials?: Record<string, string>): Promise<boolean>
   disconnect(): Promise<void>
 
   getAccount(): Promise<Account>
   getBalances(): Promise<Balance[]>
-
   getQuote(symbol: string): Promise<Quote>
+  getOrderBook(symbol: string): Promise<OrderBook>
 
   placeOrder(order: OrderRequest): Promise<Order>
   cancelOrder(orderId: string): Promise<void>
+  closePosition(symbol: string): Promise<Order>
 
   getOpenOrders(): Promise<Order[]>
   getPositions(): Promise<Position[]>

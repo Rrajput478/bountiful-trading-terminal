@@ -11,171 +11,140 @@ import {
 type ChartProps = {
   symbol: string
   timeframe: string
+  theme?: 'dark' | 'light'
 }
 
-function Chart({ symbol, timeframe }: ChartProps) {
+function Chart({ symbol, timeframe, theme = 'dark' }: ChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
-
   const [candles, setCandles] = useState<any[]>([])
-
   const chartRef = useRef<IChartApi | null>(null)
+  const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
 
-  const seriesRef =
-    useRef<ISeriesApi<'Candlestick'> | null>(null)
-
-  // 1. Load candles from backend
-   useEffect(() => {
-  let active = true
-
-  const loadCandles = async () => {
-    try {
-      const response = await fetch(
-        `http://127.0.0.1:3000/api/market-data/paper?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}`,
-      )
-
-      const data = await response.json()
-
-      if (active) {
-        setCandles(data.candles)
-      }
-    } catch (error) {
-      console.error(
-        'Failed to load market data:',
-        error,
-      )
-    }
-  }
-
-  loadCandles()
-
-  return () => {
-    active = false
-  }
-}, [symbol, timeframe]) 
-
-  // 2. Create chart when candles arrive
+  // 1. Initial / symbol / timeframe change load
   useEffect(() => {
-    if (!containerRef.current) return
+    let active = true
 
-    if (candles.length === 0) return
+    const loadCandles = async () => {
+      try {
+        const response = await fetch(
+          `http://127.0.0.1:3000/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=120`,
+        )
+        const data = await response.json()
+        if (active && Array.isArray(data)) {
+          setCandles(data)
+        }
+      } catch (error) {
+        console.error('Failed to load chart candles:', error)
+      }
+    }
 
+    loadCandles()
+
+    return () => {
+      active = false
+    }
+  }, [symbol, timeframe])
+
+  // 2. Build or rebuild chart instance
+  useEffect(() => {
+    if (!containerRef.current || candles.length === 0) return
+
+    const isDark = theme === 'dark'
     const chart = createChart(containerRef.current, {
       layout: {
-        background: {
-          color: '#080b10',
-        },
-        textColor: '#687384',
+        background: { color: isDark ? '#080b10' : '#ffffff' },
+        textColor: isDark ? '#687384' : '#475569',
       },
-
       grid: {
-        vertLines: {
-          color: '#111820',
-        },
-        horzLines: {
-          color: '#111820',
-        },
+        vertLines: { color: isDark ? '#111820' : '#f1f5f9' },
+        horzLines: { color: isDark ? '#111820' : '#f1f5f9' },
       },
-
       crosshair: {
         mode: 1,
       },
-
       rightPriceScale: {
-        borderColor: '#1b232d',
+        borderColor: isDark ? '#1b232d' : '#e2e8f0',
       },
-
       timeScale: {
-        borderColor: '#1b232d',
+        borderColor: isDark ? '#1b232d' : '#e2e8f0',
         timeVisible: true,
         secondsVisible: false,
       },
-
-      width: containerRef.current.clientWidth,
-      height: containerRef.current.clientHeight,
+      width: containerRef.current.clientWidth || 600,
+      height: containerRef.current.clientHeight || 400,
     })
 
-    const series = chart.addSeries(
-      CandlestickSeries,
-      {
-        upColor: '#35d07f',
-        downColor: '#d94b5b',
-        borderUpColor: '#35d07f',
-        borderDownColor: '#d94b5b',
-        wickUpColor: '#35d07f',
-        wickDownColor: '#d94b5b',
-      },
-    )
+    const series = chart.addSeries(CandlestickSeries, {
+      upColor: '#10b981',
+      downColor: '#ef4444',
+      borderUpColor: '#10b981',
+      borderDownColor: '#ef4444',
+      wickUpColor: '#10b981',
+      wickDownColor: '#ef4444',
+    })
 
-    const data: CandlestickData<Time>[] =
-      candles.map((candle) => ({
-        time: candle.time as Time,
-        open: candle.open,
-        high: candle.high,
-        low: candle.low,
-        close: candle.close,
-      }))
+    const formattedData: CandlestickData<Time>[] = candles.map((c) => ({
+      time: c.time as Time,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+    }))
 
-    series.setData(data)
-
+    series.setData(formattedData)
     chart.timeScale().fitContent()
 
-    const resizeObserver =
-      new ResizeObserver(() => {
-        if (!containerRef.current) return
-
-        chart.applyOptions({
-          width: containerRef.current.clientWidth,
-          height: containerRef.current.clientHeight,
-        })
+    const resizeObserver = new ResizeObserver(() => {
+      if (!containerRef.current) return
+      chart.applyOptions({
+        width: containerRef.current.clientWidth,
+        height: containerRef.current.clientHeight,
       })
+    })
 
     resizeObserver.observe(containerRef.current)
-
     chartRef.current = chart
     seriesRef.current = series
 
     return () => {
       resizeObserver.disconnect()
       chart.remove()
-
       chartRef.current = null
       seriesRef.current = null
     }
-  }, [candles])
+  }, [candles, theme])
 
-  // 3. Update live candle
-useEffect(() => {
-  if (!seriesRef.current) return
+  // 3. Real-time tick update to candle series
+  useEffect(() => {
+    let active = true
 
-  const interval = setInterval(async () => {
-    try {
-      const response = await fetch(
-        `http://127.0.0.1:3000/api/candle/paper?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}`,
-      )
+    const interval = setInterval(async () => {
+      if (!seriesRef.current || !active) return
+      try {
+        const response = await fetch(
+          `http://127.0.0.1:3000/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=1`,
+        )
+        const latestCandles = await response.json()
+        if (Array.isArray(latestCandles) && latestCandles.length > 0) {
+          const last = latestCandles[latestCandles.length - 1]
+          seriesRef.current.update({
+            time: last.time as Time,
+            open: last.open,
+            high: last.high,
+            low: last.low,
+            close: last.close,
+          })
+        }
+      } catch (err) {
+        // silent catch
+      }
+    }, 1500)
 
-      const candle = await response.json()
-
-      if (!candle?.time) return
-
-      seriesRef.current?.update({
-        time: candle.time as Time,
-        open: candle.open,
-        high: candle.high,
-        low: candle.low,
-        close: candle.close,
-      })
-    } catch (error) {
-      console.error(
-        'Failed to update live candle:',
-        error,
-      )
+    return () => {
+      active = false
+      clearInterval(interval)
     }
-  }, 1000)
-
-  return () => {
-    clearInterval(interval)
-  }
-}, [symbol, timeframe])
+  }, [symbol, timeframe])
 
   return (
     <div
@@ -183,10 +152,10 @@ useEffect(() => {
       style={{
         width: '100%',
         height: '100%',
+        position: 'relative',
       }}
     />
   )
 }
-
 
 export default Chart

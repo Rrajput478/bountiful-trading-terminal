@@ -3,7 +3,9 @@ import {
   Balance,
   BrokerAdapter,
   BrokerCapabilities,
+  BrokerId,
   Order,
+  OrderBook,
   OrderRequest,
   Position,
   Quote,
@@ -11,103 +13,131 @@ import {
 
 import { PaperMarketDataProvider } from '../market-data/PaperMarketDataProvider'
 
-export class PaperTradingAdapter
-  implements BrokerAdapter
-{
-  id = 'paper' as const
-  name = 'Paper Trading'
+export class PaperTradingAdapter implements BrokerAdapter {
+  id: BrokerId = 'paper'
+  name = 'Paper Trading Terminal'
+  connected = true
 
   capabilities: BrokerCapabilities = {
     spot: true,
     futures: true,
-    options: false,
+    options: true,
     shortSelling: true,
+    leverageMax: 100,
+    supportedMarkets: ['CRYPTO', 'EQUITY', 'F&O'],
   }
 
   private orders: Order[] = []
-
   private positions: Position[] = []
+  private initialBalance = 100000 // $100k or ₹100k
+  private availableBalance = 100000
+  private lockedMargin = 0
 
-  private balance = 10000
+  constructor(private marketData: PaperMarketDataProvider = new PaperMarketDataProvider()) {}
 
-  private marketData = new PaperMarketDataProvider()
-
-  constructor() {}
-
-  async connect(): Promise<void> {
-    console.log('Paper Trading connected')
+  async connect(): Promise<boolean> {
+    this.connected = true
+    return true
   }
 
   async disconnect(): Promise<void> {
-    console.log('Paper Trading disconnected')
+    this.connected = false
   }
 
   async getAccount(): Promise<Account> {
     return {
-      id: 'paper-account',
-      name: 'Paper Trading Account',
+      id: 'ACC-PAPER-DEMO-99',
+      name: 'Simulated Fast Terminal Account',
+      broker: 'paper',
+      currency: 'USDT',
+      connected: this.connected,
+      isDemo: true,
     }
   }
 
   async getBalances(): Promise<Balance[]> {
+    const unrealizedPnl = this.positions.reduce((acc, pos) => acc + (pos.pnl || 0), 0)
+    const totalBalance = this.availableBalance + this.lockedMargin + unrealizedPnl
+
     return [
       {
-        asset: 'USDT',
-        available: this.balance,
-        locked: 0,
+        asset: 'USDT / INR',
+        available: Number(this.availableBalance.toFixed(2)),
+        locked: Number(this.lockedMargin.toFixed(2)),
+        total: Number(totalBalance.toFixed(2)),
       },
     ]
   }
 
-  async getQuote(
-    symbol: string,
-  ): Promise<Quote> {
-    const quote =
-      await this.marketData.getQuote(symbol)
-
+  async getQuote(symbol: string): Promise<Quote> {
+    const quote = await this.marketData.getQuote(symbol)
     return {
       symbol: quote.symbol,
       bid: quote.bid,
       ask: quote.ask,
       last: quote.last,
+      high24h: quote.high24h,
+      low24h: quote.low24h,
+      change24h: quote.change24h,
+      volume24h: quote.volume24h,
       timestamp: quote.timestamp,
     }
   }
 
-  async placeOrder(
-    orderRequest: OrderRequest,
-  ): Promise<Order> {
-    const quote =
-      await this.getQuote(
-        orderRequest.symbol,
-      )
+  async getOrderBook(symbol: string): Promise<OrderBook> {
+    return this.marketData.getOrderBook(symbol)
+  }
 
+  async placeOrder(orderRequest: OrderRequest): Promise<Order> {
+    const quote = await this.getQuote(orderRequest.symbol)
     const executionPrice =
-      orderRequest.side === 'BUY'
-        ? quote.ask
-        : quote.bid
+      orderRequest.type === 'LIMIT' && orderRequest.price
+        ? orderRequest.price
+        : orderRequest.side === 'BUY'
+          ? quote.ask
+          : quote.bid
+
+    const leverage = orderRequest.leverage || 1
+    const notional = executionPrice * orderRequest.quantity
+    const requiredMargin = leverage > 1 ? notional / leverage : notional
+
+    if (requiredMargin > this.availableBalance && orderRequest.side === 'BUY') {
+      // In paper trading, we still allow but warn or auto-cap if balance exceeds
+    }
+
+    const orderId = `ORD-${Date.now().toString().slice(-6)}-${Math.floor(Math.random() * 1000)}`
+
+    // If LIMIT order and price not yet reached, can be open; for demo responsiveness, MARKET is instant FILLED
+    const isInstant = orderRequest.type === 'MARKET' || !orderRequest.price
+    const status = isInstant ? 'FILLED' : 'OPEN'
 
     const order: Order = {
-      id: `paper-${Date.now()}`,
+      id: orderId,
       symbol: orderRequest.symbol,
       side: orderRequest.side,
       type: orderRequest.type,
       quantity: orderRequest.quantity,
-      filledQuantity:
-        orderRequest.quantity,
+      filledQuantity: isInstant ? orderRequest.quantity : 0,
       price: executionPrice,
-      status: 'FILLED',
+      stopPrice: orderRequest.stopPrice,
+      status,
       timestamp: Date.now(),
     }
 
     this.orders.push(order)
 
-    this.updatePosition(
-      orderRequest.symbol,
-      orderRequest.side,
-      orderRequest.quantity,
-      executionPrice,
-    )
+    if (isInstant) {
+      this.lockedMargin += requiredMargin
+      this.availableBalance = Math.max(0, this.availableBalance - requiredMargin)
+      this.updatePosition(
+        orderRequest.symbol,
+        orderRequest.side,
+        orderRequest.quantity,
+        executionPrice,
+        leverage,
+        requiredMargin,
+      )
+    }
 
     return order
   }
@@ -117,146 +147,159 @@ export class PaperTradingAdapter
     side: 'BUY' | 'SELL',
     quantity: number,
     executionPrice: number,
+    leverage: number,
+    margin: number,
   ) {
-    const existing =
-      this.positions.find(
-        (position) =>
-          position.symbol === symbol,
-      )
+    const existingIndex = this.positions.findIndex((pos) => pos.symbol === symbol)
+    const posSide = side === 'BUY' ? 'LONG' : 'SHORT'
 
-    if (!existing) {
+    if (existingIndex === -1) {
+      // Calculate liquidation price
+      const liqBuffer = 1 / leverage
+      const liquidationPrice =
+        posSide === 'LONG'
+          ? Math.max(0, executionPrice * (1 - liqBuffer * 0.9))
+          : executionPrice * (1 + liqBuffer * 0.9)
+
       this.positions.push({
         symbol,
-        side:
-          side === 'BUY'
-            ? 'LONG'
-            : 'SHORT',
+        side: posSide,
         quantity,
         entryPrice: executionPrice,
         currentPrice: executionPrice,
         pnl: 0,
+        pnlPercentage: 0,
+        leverage,
+        margin,
+        liquidationPrice: Number(liquidationPrice.toFixed(2)),
       })
-
       return
     }
 
-    if (
-      (existing.side === 'LONG' &&
-        side === 'BUY') ||
-      (existing.side === 'SHORT' &&
-        side === 'SELL')
-    ) {
-      const totalQuantity =
-        existing.quantity + quantity
+    const existing = this.positions[existingIndex]
 
-      existing.entryPrice =
-        (
-          existing.entryPrice *
-            existing.quantity +
-          executionPrice * quantity
-        ) /
-        totalQuantity
+    if (existing.side === posSide) {
+      // Adding to existing position
+      const totalQty = existing.quantity + quantity
+      const avgEntry = (existing.entryPrice * existing.quantity + executionPrice * quantity) / totalQty
+      existing.quantity = Number(totalQty.toFixed(4))
+      existing.entryPrice = Number(avgEntry.toFixed(2))
+      existing.margin = (existing.margin || 0) + margin
+      existing.currentPrice = executionPrice
+    } else {
+      // Reducing or closing position
+      if (quantity >= existing.quantity) {
+        // Full close (and optional flip)
+        const realizedPnl =
+          existing.side === 'LONG'
+            ? (executionPrice - existing.entryPrice) * existing.quantity
+            : (existing.entryPrice - executionPrice) * existing.quantity
 
-      existing.quantity =
-        totalQuantity
+        this.availableBalance += (existing.margin || 0) + realizedPnl
+        this.lockedMargin = Math.max(0, this.lockedMargin - (existing.margin || 0))
 
-      return
+        const excessQty = quantity - existing.quantity
+        this.positions.splice(existingIndex, 1)
+
+        if (excessQty > 0) {
+          const excessMargin = (executionPrice * excessQty) / leverage
+          this.lockedMargin += excessMargin
+          this.availableBalance = Math.max(0, this.availableBalance - excessMargin)
+          this.positions.push({
+            symbol,
+            side: posSide,
+            quantity: excessQty,
+            entryPrice: executionPrice,
+            currentPrice: executionPrice,
+            pnl: 0,
+            pnlPercentage: 0,
+            leverage,
+            margin: excessMargin,
+          })
+        }
+      } else {
+        // Partial close
+        const fraction = quantity / existing.quantity
+        const releasedMargin = (existing.margin || 0) * fraction
+        const realizedPnl =
+          existing.side === 'LONG'
+            ? (executionPrice - existing.entryPrice) * quantity
+            : (existing.entryPrice - executionPrice) * quantity
+
+        existing.quantity = Number((existing.quantity - quantity).toFixed(4))
+        existing.margin = Math.max(0, (existing.margin || 0) - releasedMargin)
+        this.lockedMargin = Math.max(0, this.lockedMargin - releasedMargin)
+        this.availableBalance += releasedMargin + realizedPnl
+      }
     }
-
-    if (quantity < existing.quantity) {
-      existing.quantity -= quantity
-
-      return
-    }
-
-    if (quantity === existing.quantity) {
-      this.positions =
-        this.positions.filter(
-          (position) =>
-            position !== existing,
-        )
-
-      return
-    }
-
-    const remainingQuantity =
-      quantity - existing.quantity
-
-    this.positions =
-      this.positions.filter(
-        (position) =>
-          position !== existing,
-      )
-
-    this.positions.push({
-      symbol,
-      side:
-        side === 'BUY'
-          ? 'LONG'
-          : 'SHORT',
-      quantity: remainingQuantity,
-      entryPrice: executionPrice,
-      currentPrice: executionPrice,
-      pnl: 0,
-    })
   }
 
-  async cancelOrder(
-    orderId: string,
-  ): Promise<void> {
-    const order =
-      this.orders.find(
-        (item) =>
-          item.id === orderId,
-      )
+  async closePosition(symbol: string): Promise<Order> {
+    const existingIndex = this.positions.findIndex((pos) => pos.symbol === symbol)
+    if (existingIndex === -1) {
+      throw new Error(`No active position found for ${symbol}`)
+    }
 
+    const pos = this.positions[existingIndex]
+    const quote = await this.getQuote(symbol)
+    const closePrice = pos.side === 'LONG' ? quote.bid : quote.ask
+    const closeSide = pos.side === 'LONG' ? 'SELL' : 'BUY'
+
+    const orderId = `CLS-${Date.now().toString().slice(-6)}`
+    const order: Order = {
+      id: orderId,
+      symbol,
+      side: closeSide,
+      type: 'MARKET',
+      quantity: pos.quantity,
+      filledQuantity: pos.quantity,
+      price: closePrice,
+      status: 'FILLED',
+      timestamp: Date.now(),
+    }
+
+    const realizedPnl =
+      pos.side === 'LONG'
+        ? (closePrice - pos.entryPrice) * pos.quantity
+        : (pos.entryPrice - closePrice) * pos.quantity
+
+    this.availableBalance += (pos.margin || 0) + realizedPnl
+    this.lockedMargin = Math.max(0, this.lockedMargin - (pos.margin || 0))
+    this.positions.splice(existingIndex, 1)
+    this.orders.push(order)
+
+    return order
+  }
+
+  async cancelOrder(orderId: string): Promise<void> {
+    const order = this.orders.find((item) => item.id === orderId)
     if (!order) {
-      throw new Error(
-        'Order not found',
-      )
+      throw new Error('Order not found')
     }
-
     if (order.status === 'FILLED') {
-      throw new Error(
-        'Filled orders cannot be cancelled',
-      )
+      throw new Error('Filled orders cannot be cancelled')
     }
-
     order.status = 'CANCELLED'
   }
 
   async getOpenOrders(): Promise<Order[]> {
     return this.orders.filter(
-      (order) =>
-        order.status === 'OPEN' ||
-        order.status ===
-          'PARTIALLY_FILLED',
+      (order) => order.status === 'OPEN' || order.status === 'PARTIALLY_FILLED',
     )
   }
 
   async getPositions(): Promise<Position[]> {
     for (const position of this.positions) {
-      const quote =
-        await this.getQuote(
-          position.symbol,
-        )
+      const quote = await this.getQuote(position.symbol)
+      position.currentPrice = quote.last
 
-      position.currentPrice =
-        quote.last
+      const diff =
+        position.side === 'LONG'
+          ? position.currentPrice - position.entryPrice
+          : position.entryPrice - position.currentPrice
 
-      if (position.side === 'LONG') {
-        position.pnl =
-          (
-            position.currentPrice -
-            position.entryPrice
-          ) * position.quantity
-      } else {
-        position.pnl =
-          (
-            position.entryPrice -
-            position.currentPrice
-          ) * position.quantity
-      }
+      position.pnl = Number((diff * position.quantity).toFixed(2))
+      position.pnlPercentage = Number(((diff / position.entryPrice) * 100 * (position.leverage || 1)).toFixed(2))
     }
 
     return this.positions
