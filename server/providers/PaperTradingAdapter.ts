@@ -30,9 +30,9 @@ export class PaperTradingAdapter
 
   private balance = 10000
 
-  constructor(
-    private marketData: PaperMarketDataProvider,
-  ) {}
+  private marketData = new PaperMarketDataProvider()
+
+  constructor() {}
 
   async connect(): Promise<void> {
     console.log('Paper Trading connected')

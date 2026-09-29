@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import Chart from '../components/Chart'
 import './Terminal.css'
+import { useTrading } from '../hooks/useTrading'
+import type { OrderRequest } from '../services/api'
 
 type SymbolName =
   | 'BTC/USDT'
@@ -49,6 +51,9 @@ const timeframes = [
 ]
 
 function Terminal() {
+  // Use trading hook
+  const trading = useTrading()
+
   const [symbol, setSymbol] =
     useState<SymbolName>('BTC/USDT')
 
@@ -87,6 +92,10 @@ function Terminal() {
 
   const [theme, setTheme] =
     useState<Theme>('dark')
+
+  /* ---------------- POSITIONS & ORDERS ---------------- */
+  // Now using trading hook for positions, orders, balances
+  // Remove local state - use trading.positions, trading.orders, trading.balances
 
   /* ---------------- LEVERAGE ---------------- */
 
@@ -364,6 +373,52 @@ function Terminal() {
     )
 
     closeLeverageEditor()
+  }
+
+  /* ---------------- ORDER EXECUTION ---------------- */
+
+  const executeTrade = async (side: 'BUY' | 'SELL') => {
+    if (trading.isExecuting) {
+      return
+    }
+
+    if (estimatedQuantity <= 0) {
+      alert('Invalid order quantity')
+      return
+    }
+
+    try {
+      const orderRequest: OrderRequest = {
+        symbol,
+        side,
+        type: orderType,
+        quantity: estimatedQuantity,
+      }
+
+      // Add price for LIMIT and STOP_LIMIT orders
+      if (orderType === 'LIMIT' || orderType === 'STOP_LIMIT') {
+        const price = Number.parseFloat(limitPrice)
+        if (!price || price <= 0) {
+          alert('Please enter a valid limit price')
+          return
+        }
+        orderRequest.price = price
+      }
+
+      // Add stop price for STOP and STOP_LIMIT orders
+      if (orderType === 'STOP' || orderType === 'STOP_LIMIT') {
+        const stop = Number.parseFloat(stopPrice)
+        if (!stop || stop <= 0) {
+          alert('Please enter a valid stop price')
+          return
+        }
+        orderRequest.stopPrice = stop
+      }
+
+      await trading.placeOrder(orderRequest)
+    } catch (error) {
+      console.error('Order execution failed:', error)
+    }
   }
 
   /* ---------------- QUOTES ---------------- */
@@ -1007,30 +1062,98 @@ function Terminal() {
               <div className="bottom-content">
                 {activeTab ===
                   'Positions' && (
-                  <div className="empty-state">
-                    <div className="empty-state-title">
-                      No active positions
-                    </div>
+                  trading.positions.length === 0 ? (
+                    <div className="empty-state">
+                      <div className="empty-state-title">
+                        No active positions
+                      </div>
 
-                    <div className="empty-state-subtitle">
-                      Your open positions
-                      will appear here.
+                      <div className="empty-state-subtitle">
+                        Your open positions
+                        will appear here.
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="positions-table">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Symbol</th>
+                            <th>Side</th>
+                            <th>Quantity</th>
+                            <th>Entry Price</th>
+                            <th>Current Price</th>
+                            <th>P&L</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {trading.positions.map((pos, idx) => (
+                            <tr key={idx}>
+                              <td><strong>{pos.symbol}</strong></td>
+                              <td className={pos.side === 'LONG' ? 'buy-side' : 'sell-side'}>
+                                {pos.side}
+                              </td>
+                              <td>{formatNumber(pos.quantity)}</td>
+                              <td>{formatPrice(pos.entryPrice)}</td>
+                              <td>{formatPrice(pos.currentPrice)}</td>
+                              <td className={pos.pnl >= 0 ? 'profit' : 'loss'}>
+                                {pos.pnl >= 0 ? '+' : ''}{formatPrice(pos.pnl)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
                 )}
 
                 {activeTab ===
                   'Orders' && (
-                  <div className="empty-state">
-                    <div className="empty-state-title">
-                      No open orders
-                    </div>
+                  trading.orderHistory.length === 0 ? (
+                    <div className="empty-state">
+                      <div className="empty-state-title">
+                        No orders
+                      </div>
 
-                    <div className="empty-state-subtitle">
-                      Pending orders will
-                      appear here.
+                      <div className="empty-state-subtitle">
+                        Order history will
+                        appear here.
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="orders-table">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Time</th>
+                            <th>Symbol</th>
+                            <th>Side</th>
+                            <th>Type</th>
+                            <th>Quantity</th>
+                            <th>Price</th>
+                            <th>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {trading.orderHistory.slice().reverse().map((order) => (
+                            <tr key={order.id}>
+                              <td>{new Date(order.timestamp).toLocaleTimeString()}</td>
+                              <td><strong>{order.symbol}</strong></td>
+                              <td className={order.side === 'BUY' ? 'buy-side' : 'sell-side'}>
+                                {order.side}
+                              </td>
+                              <td>{order.type}</td>
+                              <td>{formatNumber(order.filledQuantity)}</td>
+                              <td>{order.price ? formatPrice(order.price) : '—'}</td>
+                              <td className={`status-${order.status.toLowerCase()}`}>
+                                {order.status}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
                 )}
 
                 {activeTab ===
@@ -1066,12 +1189,14 @@ function Terminal() {
 
               <button
                 className="trade-side-button buy"
+                onClick={() => executeTrade('BUY')}
+                disabled={trading.isExecuting || estimatedQuantity <= 0}
                 aria-label={`Buy at ask ${formatPrice(
                   askPrice,
                 )}`}
               >
                 <strong>
-                  {formatPrice(
+                  {trading.isExecuting ? '...' : formatPrice(
                     askPrice,
                   )}
                 </strong>
@@ -1128,12 +1253,14 @@ function Terminal() {
 
               <button
                 className="trade-side-button sell"
+                onClick={() => executeTrade('SELL')}
+                disabled={trading.isExecuting || estimatedQuantity <= 0}
                 aria-label={`Sell at bid ${formatPrice(
                   bidPrice,
                 )}`}
               >
                 <strong>
-                  {formatPrice(
+                  {trading.isExecuting ? '...' : formatPrice(
                     bidPrice,
                   )}
                 </strong>
