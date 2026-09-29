@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://127.0.0.1:3000'
+const API_BASE = '/api'
 
 export interface OrderRequest {
   symbol: string
@@ -69,104 +69,97 @@ export interface BrokerInfo {
   }
 }
 
+async function request<T>(url: string, options?: RequestInit): Promise<T> {
+  try {
+    const res = await fetch(url, options)
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `HTTP error ${res.status}`)
+    }
+    return res.json()
+  } catch (err: any) {
+    // Fallback directly to 127.0.0.1:3000 if dev server proxy is bypassing
+    if (url.startsWith('/api')) {
+      const directUrl = `http://127.0.0.1:3000${url}`
+      const directRes = await fetch(directUrl, options)
+      if (!directRes.ok) {
+        const directErr = await directRes.json().catch(() => ({}))
+        throw new Error(directErr.error || `Direct HTTP error ${directRes.status}`)
+      }
+      return directRes.json()
+    }
+    throw err
+  }
+}
+
 export async function getBackendHealth() {
-  const response = await fetch(`${API_BASE_URL}/api/health`)
-  if (!response.ok) throw new Error('Backend is not responding')
-  return response.json()
+  return request<{ status: string; service: string }>(`${API_BASE}/health`)
 }
 
 export async function getBrokers(): Promise<BrokerInfo[]> {
-  const response = await fetch(`${API_BASE_URL}/api/brokers`)
-  if (!response.ok) throw new Error('Failed to fetch brokers')
-  return response.json()
+  return request<BrokerInfo[]>(`${API_BASE}/brokers`)
 }
 
 export async function connectBroker(broker: string, credentials?: Record<string, string>) {
-  const response = await fetch(`${API_BASE_URL}/api/broker/connect`, {
+  return request<{ success: boolean; message: string }>(`${API_BASE}/broker/connect`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ broker, credentials }),
   })
-  if (!response.ok) throw new Error('Failed to connect broker')
-  return response.json()
 }
 
 export async function getQuote(symbol: string): Promise<Quote> {
-  const response = await fetch(`${API_BASE_URL}/api/quote?symbol=${encodeURIComponent(symbol)}`)
-  if (!response.ok) throw new Error('Failed to fetch quote')
-  return response.json()
+  return request<Quote>(`${API_BASE}/quote?symbol=${encodeURIComponent(symbol)}`)
 }
 
 export async function getOrderBook(symbol: string) {
-  const response = await fetch(`${API_BASE_URL}/api/orderbook?symbol=${encodeURIComponent(symbol)}`)
-  if (!response.ok) throw new Error('Failed to fetch order book')
-  return response.json()
+  return request<{ bids: any[]; asks: any[]; timestamp: number }>(
+    `${API_BASE}/orderbook?symbol=${encodeURIComponent(symbol)}`,
+  )
 }
 
 export async function getCandles(symbol: string, timeframe = '1m', limit = 120) {
-  const response = await fetch(
-    `${API_BASE_URL}/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=${limit}`,
+  return request<any[]>(
+    `${API_BASE}/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=${limit}`,
   )
-  if (!response.ok) throw new Error('Failed to fetch candles')
-  return response.json()
 }
 
 export async function placeOrder(orderRequest: OrderRequest, broker = 'paper') {
-  const response = await fetch(`${API_BASE_URL}/api/order/${broker}`, {
+  return request<{ success: boolean; order: Order }>(`${API_BASE}/order/${broker}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(orderRequest),
   })
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}))
-    throw new Error(err.error || 'Order placement failed')
-  }
-  return response.json()
 }
 
 export async function closePosition(symbol: string, broker = 'paper') {
-  const response = await fetch(`${API_BASE_URL}/api/position/close/${broker}`, {
+  return request<{ success: boolean; order: Order }>(`${API_BASE}/position/close/${broker}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ symbol }),
   })
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to close position')
-  }
-  return response.json()
 }
 
 export async function cancelOrder(orderId: string, broker = 'paper') {
-  const response = await fetch(`${API_BASE_URL}/api/order/cancel/${broker}`, {
+  return request<{ success: boolean }>(`${API_BASE}/order/cancel/${broker}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ orderId }),
   })
-  if (!response.ok) throw new Error('Failed to cancel order')
-  return response.json()
 }
 
 export async function getPositions(broker = 'paper'): Promise<Position[]> {
-  const response = await fetch(`${API_BASE_URL}/api/positions/${broker}`)
-  if (!response.ok) throw new Error('Failed to fetch positions')
-  return response.json()
+  return request<Position[]>(`${API_BASE}/positions/${broker}`)
 }
 
 export async function getOpenOrders(broker = 'paper'): Promise<Order[]> {
-  const response = await fetch(`${API_BASE_URL}/api/orders/${broker}`)
-  if (!response.ok) throw new Error('Failed to fetch orders')
-  return response.json()
+  return request<Order[]>(`${API_BASE}/orders/${broker}`)
 }
 
 export async function getOrderHistory(broker = 'paper'): Promise<Order[]> {
-  const response = await fetch(`${API_BASE_URL}/api/history/${broker}`)
-  if (!response.ok) throw new Error('Failed to fetch order history')
-  return response.json()
+  return request<Order[]>(`${API_BASE}/history/${broker}`)
 }
 
 export async function getBalances(broker = 'paper'): Promise<Balance[]> {
-  const response = await fetch(`${API_BASE_URL}/api/balances/${broker}`)
-  if (!response.ok) throw new Error('Failed to fetch balances')
-  return response.json()
+  return request<Balance[]>(`${API_BASE}/balances/${broker}`)
 }
