@@ -19,6 +19,7 @@ app.get('/api/health', async () => {
   return {
     status: 'ok',
     service: 'Bountiful Trading Terminal Backend',
+    version: 'DEPLOY-TEST-001',
   }
 })
 
