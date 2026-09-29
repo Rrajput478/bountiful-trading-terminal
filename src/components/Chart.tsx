@@ -2,26 +2,35 @@ import { useEffect, useRef } from 'react'
 import {
   createChart,
   CandlestickSeries,
+  LineStyle,
   type IChartApi,
   type ISeriesApi,
+  type IPriceLine,
   type CandlestickData,
   type Time,
 } from 'lightweight-charts'
 import * as api from '../services/api'
+import { type Position } from '../hooks/useTrading'
 
 type ChartProps = {
   symbol: string
   timeframe: string
   theme?: 'dark' | 'light'
+  positions?: Position[]
 }
 
-function Chart({ symbol, timeframe, theme = 'dark' }: ChartProps) {
+function Chart({
+  symbol,
+  timeframe,
+  theme = 'dark',
+  positions = [],
+}: ChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
-  const isInitializedRef = useRef(false)
+  const priceLinesRef = useRef<IPriceLine[]>([])
 
-  // 1. Initialize Chart instance once
+  // 1. Initialize Lightweight Chart instance
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -61,7 +70,6 @@ function Chart({ symbol, timeframe, theme = 'dark' }: ChartProps) {
 
     chartRef.current = chart
     seriesRef.current = series
-    isInitializedRef.current = true
 
     const handleResize = () => {
       if (containerRef.current && chartRef.current) {
@@ -79,11 +87,11 @@ function Chart({ symbol, timeframe, theme = 'dark' }: ChartProps) {
       chart.remove()
       chartRef.current = null
       seriesRef.current = null
-      isInitializedRef.current = false
+      priceLinesRef.current = []
     }
   }, [theme])
 
-  // 2. Load historical candles when symbol or timeframe changes
+  // 2. Load historical candles
   useEffect(() => {
     let active = true
 
@@ -100,7 +108,6 @@ function Chart({ symbol, timeframe, theme = 'dark' }: ChartProps) {
           close: Number(c.close),
         }))
 
-        // Sort ascending by time to satisfy lightweight-charts requirement
         formatted.sort((a, b) => (Number(a.time) || 0) - (Number(b.time) || 0))
 
         seriesRef.current.setData(formatted)
@@ -114,7 +121,6 @@ function Chart({ symbol, timeframe, theme = 'dark' }: ChartProps) {
 
     loadData()
 
-    // Real-time tick update every 1s
     const tickInterval = setInterval(async () => {
       if (!seriesRef.current || !active) return
       try {
@@ -140,16 +146,89 @@ function Chart({ symbol, timeframe, theme = 'dark' }: ChartProps) {
     }
   }, [symbol, timeframe])
 
+  // 3. Render Position, SL, TP, Liquidation Price Lines on Chart!
+  useEffect(() => {
+    if (!seriesRef.current) return
+
+    // Remove existing price lines
+    priceLinesRef.current.forEach((line) => {
+      try {
+        seriesRef.current?.removePriceLine(line)
+      } catch (e) {
+        // ignore
+      }
+    })
+    priceLinesRef.current = []
+
+    // Filter positions matching current symbol
+    const activeSymbolPositions = positions.filter((p) => p.symbol === symbol)
+
+    activeSymbolPositions.forEach((pos) => {
+      const isLong = pos.side === 'LONG'
+      const posColor = isLong ? '#10b981' : '#ef4444'
+
+      // 1. Entry Price Line
+      if (pos.entryPrice) {
+        const entryLine = seriesRef.current!.createPriceLine({
+          price: pos.entryPrice,
+          color: posColor,
+          lineWidth: 2,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: `${pos.side} ${pos.quantity} @ ${pos.entryPrice}`,
+        })
+        priceLinesRef.current.push(entryLine)
+      }
+
+      // 2. Take Profit (TP) Line
+      if (pos.takeProfit) {
+        const tpLine = seriesRef.current!.createPriceLine({
+          price: pos.takeProfit,
+          color: '#10b981',
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          axisLabelVisible: true,
+          title: `TP: ${pos.takeProfit}`,
+        })
+        priceLinesRef.current.push(tpLine)
+      }
+
+      // 3. Stop Loss (SL) Line
+      if (pos.stopLoss) {
+        const slLine = seriesRef.current!.createPriceLine({
+          price: pos.stopLoss,
+          color: '#ef4444',
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          axisLabelVisible: true,
+          title: `SL: ${pos.stopLoss}`,
+        })
+        priceLinesRef.current.push(slLine)
+      }
+
+      // 4. Liquidation Line
+      if (pos.liquidationPrice) {
+        const liqLine = seriesRef.current!.createPriceLine({
+          price: pos.liquidationPrice,
+          color: '#f59e0b',
+          lineWidth: 1,
+          lineStyle: LineStyle.LargeDashed,
+          axisLabelVisible: true,
+          title: `LIQ: ${pos.liquidationPrice}`,
+        })
+        priceLinesRef.current.push(liqLine)
+      }
+    })
+  }, [positions, symbol])
+
   return (
-    <div
-      ref={containerRef}
-      style={{
-        width: '100%',
-        height: '100%',
-        minHeight: '320px',
-        position: 'relative',
-      }}
-    />
+    <div className="chart-wrapper-rel">
+      {/* Chart Canvas */}
+      <div
+        ref={containerRef}
+        className="chart-canvas-div"
+      />
+    </div>
   )
 }
 

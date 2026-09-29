@@ -7,6 +7,8 @@ export interface OrderRequest {
   quantity: number
   price?: number
   stopPrice?: number
+  stopLoss?: number
+  takeProfit?: number
   leverage?: number
 }
 
@@ -33,6 +35,8 @@ export interface Position {
   leverage?: number
   margin?: number
   liquidationPrice?: number
+  stopLoss?: number
+  takeProfit?: number
 }
 
 export interface Order {
@@ -44,8 +48,11 @@ export interface Order {
   filledQuantity: number
   price?: number
   stopPrice?: number
+  stopLoss?: number
+  takeProfit?: number
   status: 'OPEN' | 'PARTIALLY_FILLED' | 'FILLED' | 'CANCELLED' | 'REJECTED'
   timestamp: number
+  closeReason?: 'MANUAL' | 'TAKE_PROFIT' | 'STOP_LOSS' | 'LIQUIDATION'
 }
 
 export interface Balance {
@@ -53,6 +60,9 @@ export interface Balance {
   available: number
   locked: number
   total: number
+  equity?: number
+  freeMargin?: number
+  marginLevel?: number
 }
 
 export interface BrokerInfo {
@@ -78,7 +88,6 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     }
     return res.json()
   } catch (err: any) {
-    // Fallback directly to 127.0.0.1:3000 if dev server proxy is bypassing
     if (url.startsWith('/api')) {
       const directUrl = `http://127.0.0.1:3000${url}`
       const directRes = await fetch(directUrl, options)
@@ -129,6 +138,19 @@ export async function placeOrder(orderRequest: OrderRequest, broker = 'paper') {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(orderRequest),
+  })
+}
+
+export async function modifyPosition(
+  symbol: string,
+  stopLoss?: number,
+  takeProfit?: number,
+  broker = 'paper',
+) {
+  return request<{ success: boolean; position: Position }>(`${API_BASE}/position/modify/${broker}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol, stopLoss, takeProfit }),
   })
 }
 

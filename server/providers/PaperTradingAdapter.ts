@@ -29,8 +29,7 @@ export class PaperTradingAdapter implements BrokerAdapter {
 
   private orders: Order[] = []
   private positions: Position[] = []
-  private initialBalance = 100000 // $100k or ₹100k
-  private availableBalance = 100000
+  private availableBalance = 100000 // $100k
   private lockedMargin = 0
 
   constructor(private marketData: PaperMarketDataProvider = new PaperMarketDataProvider()) {}
@@ -46,25 +45,30 @@ export class PaperTradingAdapter implements BrokerAdapter {
 
   async getAccount(): Promise<Account> {
     return {
-      id: 'ACC-PAPER-DEMO-99',
-      name: 'Simulated Fast Terminal Account',
+      id: 'ACC-MT5-PAPER-PRO',
+      name: 'MT5 Pro Paper Account',
       broker: 'paper',
-      currency: 'USDT',
+      currency: 'USD',
       connected: this.connected,
       isDemo: true,
     }
   }
 
   async getBalances(): Promise<Balance[]> {
+    await this.checkTriggersAndLiquidations()
     const unrealizedPnl = this.positions.reduce((acc, pos) => acc + (pos.pnl || 0), 0)
-    const totalBalance = this.availableBalance + this.lockedMargin + unrealizedPnl
+    const equity = this.availableBalance + this.lockedMargin + unrealizedPnl
+    const marginLevel = this.lockedMargin > 0 ? (equity / this.lockedMargin) * 100 : 9999
 
     return [
       {
         asset: 'USDT / INR',
         available: Number(this.availableBalance.toFixed(2)),
         locked: Number(this.lockedMargin.toFixed(2)),
-        total: Number(totalBalance.toFixed(2)),
+        total: Number((this.availableBalance + this.lockedMargin).toFixed(2)),
+        equity: Number(equity.toFixed(2)),
+        freeMargin: Number(this.availableBalance.toFixed(2)),
+        marginLevel: Number(marginLevel.toFixed(1)),
       },
     ]
   }
@@ -101,13 +105,7 @@ export class PaperTradingAdapter implements BrokerAdapter {
     const notional = executionPrice * orderRequest.quantity
     const requiredMargin = leverage > 1 ? notional / leverage : notional
 
-    if (requiredMargin > this.availableBalance && orderRequest.side === 'BUY') {
-      // In paper trading, we still allow but warn or auto-cap if balance exceeds
-    }
-
     const orderId = `ORD-${Date.now().toString().slice(-6)}-${Math.floor(Math.random() * 1000)}`
-
-    // If LIMIT order and price not yet reached, can be open; for demo responsiveness, MARKET is instant FILLED
     const isInstant = orderRequest.type === 'MARKET' || !orderRequest.price
     const status = isInstant ? 'FILLED' : 'OPEN'
 
@@ -120,6 +118,8 @@ export class PaperTradingAdapter implements BrokerAdapter {
       filledQuantity: isInstant ? orderRequest.quantity : 0,
       price: executionPrice,
       stopPrice: orderRequest.stopPrice,
+      stopLoss: orderRequest.stopLoss,
+      takeProfit: orderRequest.takeProfit,
       status,
       timestamp: Date.now(),
     }
@@ -136,6 +136,8 @@ export class PaperTradingAdapter implements BrokerAdapter {
         executionPrice,
         leverage,
         requiredMargin,
+        orderRequest.stopLoss,
+        orderRequest.takeProfit,
       )
     }
 
@@ -149,18 +151,18 @@ export class PaperTradingAdapter implements BrokerAdapter {
     executionPrice: number,
     leverage: number,
     margin: number,
+    stopLoss?: number,
+    takeProfit?: number,
   ) {
     const existingIndex = this.positions.findIndex((pos) => pos.symbol === symbol)
     const posSide = side === 'BUY' ? 'LONG' : 'SHORT'
+    const liqBuffer = 1 / leverage
+    const liquidationPrice =
+      posSide === 'LONG'
+        ? Math.max(0, executionPrice * (1 - liqBuffer * 0.9))
+        : executionPrice * (1 + liqBuffer * 0.9)
 
     if (existingIndex === -1) {
-      // Calculate liquidation price
-      const liqBuffer = 1 / leverage
-      const liquidationPrice =
-        posSide === 'LONG'
-          ? Math.max(0, executionPrice * (1 - liqBuffer * 0.9))
-          : executionPrice * (1 + liqBuffer * 0.9)
-
       this.positions.push({
         symbol,
         side: posSide,
@@ -172,6 +174,8 @@ export class PaperTradingAdapter implements BrokerAdapter {
         leverage,
         margin,
         liquidationPrice: Number(liquidationPrice.toFixed(2)),
+        stopLoss,
+        takeProfit,
       })
       return
     }
@@ -179,17 +183,16 @@ export class PaperTradingAdapter implements BrokerAdapter {
     const existing = this.positions[existingIndex]
 
     if (existing.side === posSide) {
-      // Adding to existing position
       const totalQty = existing.quantity + quantity
       const avgEntry = (existing.entryPrice * existing.quantity + executionPrice * quantity) / totalQty
       existing.quantity = Number(totalQty.toFixed(4))
       existing.entryPrice = Number(avgEntry.toFixed(2))
       existing.margin = (existing.margin || 0) + margin
       existing.currentPrice = executionPrice
+      if (stopLoss !== undefined) existing.stopLoss = stopLoss
+      if (takeProfit !== undefined) existing.takeProfit = takeProfit
     } else {
-      // Reducing or closing position
       if (quantity >= existing.quantity) {
-        // Full close (and optional flip)
         const realizedPnl =
           existing.side === 'LONG'
             ? (executionPrice - existing.entryPrice) * existing.quantity
@@ -215,10 +218,12 @@ export class PaperTradingAdapter implements BrokerAdapter {
             pnlPercentage: 0,
             leverage,
             margin: excessMargin,
+            liquidationPrice: Number(liquidationPrice.toFixed(2)),
+            stopLoss,
+            takeProfit,
           })
         }
       } else {
-        // Partial close
         const fraction = quantity / existing.quantity
         const releasedMargin = (existing.margin || 0) * fraction
         const realizedPnl =
@@ -234,7 +239,17 @@ export class PaperTradingAdapter implements BrokerAdapter {
     }
   }
 
-  async closePosition(symbol: string): Promise<Order> {
+  async modifyPosition(symbol: string, stopLoss?: number, takeProfit?: number): Promise<Position> {
+    const existing = this.positions.find((pos) => pos.symbol === symbol)
+    if (!existing) {
+      throw new Error(`No active position for ${symbol}`)
+    }
+    existing.stopLoss = stopLoss
+    existing.takeProfit = takeProfit
+    return existing
+  }
+
+  async closePosition(symbol: string, reason: 'MANUAL' | 'TAKE_PROFIT' | 'STOP_LOSS' = 'MANUAL'): Promise<Order> {
     const existingIndex = this.positions.findIndex((pos) => pos.symbol === symbol)
     if (existingIndex === -1) {
       throw new Error(`No active position found for ${symbol}`)
@@ -256,6 +271,7 @@ export class PaperTradingAdapter implements BrokerAdapter {
       price: closePrice,
       status: 'FILLED',
       timestamp: Date.now(),
+      closeReason: reason,
     }
 
     const realizedPnl =
@@ -269,6 +285,50 @@ export class PaperTradingAdapter implements BrokerAdapter {
     this.orders.push(order)
 
     return order
+  }
+
+  private async checkTriggersAndLiquidations() {
+    const toClose: { symbol: string; reason: 'TAKE_PROFIT' | 'STOP_LOSS' | 'LIQUIDATION' }[] = []
+
+    for (const pos of this.positions) {
+      const quote = await this.marketData.getQuote(pos.symbol)
+      pos.currentPrice = quote.last
+
+      const diff =
+        pos.side === 'LONG'
+          ? pos.currentPrice - pos.entryPrice
+          : pos.entryPrice - pos.currentPrice
+
+      pos.pnl = Number((diff * pos.quantity).toFixed(2))
+      pos.pnlPercentage = Number(((diff / pos.entryPrice) * 100 * (pos.leverage || 1)).toFixed(2))
+
+      // Check SL / TP Triggers
+      if (pos.side === 'LONG') {
+        if (pos.takeProfit && pos.currentPrice >= pos.takeProfit) {
+          toClose.push({ symbol: pos.symbol, reason: 'TAKE_PROFIT' })
+        } else if (pos.stopLoss && pos.currentPrice <= pos.stopLoss) {
+          toClose.push({ symbol: pos.symbol, reason: 'STOP_LOSS' })
+        } else if (pos.liquidationPrice && pos.currentPrice <= pos.liquidationPrice) {
+          toClose.push({ symbol: pos.symbol, reason: 'LIQUIDATION' })
+        }
+      } else {
+        if (pos.takeProfit && pos.currentPrice <= pos.takeProfit) {
+          toClose.push({ symbol: pos.symbol, reason: 'TAKE_PROFIT' })
+        } else if (pos.stopLoss && pos.currentPrice >= pos.stopLoss) {
+          toClose.push({ symbol: pos.symbol, reason: 'STOP_LOSS' })
+        } else if (pos.liquidationPrice && pos.currentPrice >= pos.liquidationPrice) {
+          toClose.push({ symbol: pos.symbol, reason: 'LIQUIDATION' })
+        }
+      }
+    }
+
+    for (const item of toClose) {
+      try {
+        await this.closePosition(item.symbol, item.reason)
+      } catch (e) {
+        // ignore
+      }
+    }
   }
 
   async cancelOrder(orderId: string): Promise<void> {
@@ -289,19 +349,7 @@ export class PaperTradingAdapter implements BrokerAdapter {
   }
 
   async getPositions(): Promise<Position[]> {
-    for (const position of this.positions) {
-      const quote = await this.getQuote(position.symbol)
-      position.currentPrice = quote.last
-
-      const diff =
-        position.side === 'LONG'
-          ? position.currentPrice - position.entryPrice
-          : position.entryPrice - position.currentPrice
-
-      position.pnl = Number((diff * position.quantity).toFixed(2))
-      position.pnlPercentage = Number(((diff / position.entryPrice) * 100 * (position.leverage || 1)).toFixed(2))
-    }
-
+    await this.checkTriggersAndLiquidations()
     return this.positions
   }
 

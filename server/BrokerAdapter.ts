@@ -55,6 +55,8 @@ export interface Position {
   leverage?: number
   margin?: number
   liquidationPrice?: number
+  stopLoss?: number
+  takeProfit?: number
 }
 
 export interface OrderRequest {
@@ -64,6 +66,8 @@ export interface OrderRequest {
   quantity: number
   price?: number
   stopPrice?: number
+  stopLoss?: number
+  takeProfit?: number
   leverage?: number
 }
 
@@ -76,8 +80,11 @@ export interface Order {
   filledQuantity: number
   price?: number
   stopPrice?: number
+  stopLoss?: number
+  takeProfit?: number
   status: OrderStatus
   timestamp: number
+  closeReason?: 'MANUAL' | 'TAKE_PROFIT' | 'STOP_LOSS' | 'LIQUIDATION'
 }
 
 export interface Account {
@@ -94,6 +101,9 @@ export interface Balance {
   available: number
   locked: number
   total: number
+  equity?: number
+  freeMargin?: number
+  marginLevel?: number
 }
 
 export interface BrokerCapabilities {
@@ -121,7 +131,8 @@ export interface BrokerAdapter {
 
   placeOrder(order: OrderRequest): Promise<Order>
   cancelOrder(orderId: string): Promise<void>
-  closePosition(symbol: string): Promise<Order>
+  closePosition(symbol: string, reason?: 'MANUAL' | 'TAKE_PROFIT' | 'STOP_LOSS'): Promise<Order>
+  modifyPosition(symbol: string, stopLoss?: number, takeProfit?: number): Promise<Position>
 
   getOpenOrders(): Promise<Order[]>
   getPositions(): Promise<Position[]>

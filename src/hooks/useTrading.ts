@@ -12,6 +12,8 @@ export interface Position {
   leverage?: number
   margin?: number
   liquidationPrice?: number
+  stopLoss?: number
+  takeProfit?: number
 }
 
 export interface Order {
@@ -23,8 +25,11 @@ export interface Order {
   filledQuantity: number
   price?: number
   stopPrice?: number
+  stopLoss?: number
+  takeProfit?: number
   status: 'OPEN' | 'PARTIALLY_FILLED' | 'FILLED' | 'CANCELLED' | 'REJECTED'
   timestamp: number
+  closeReason?: 'MANUAL' | 'TAKE_PROFIT' | 'STOP_LOSS' | 'LIQUIDATION'
 }
 
 export interface Balance {
@@ -32,6 +37,9 @@ export interface Balance {
   available: number
   locked: number
   total: number
+  equity?: number
+  freeMargin?: number
+  marginLevel?: number
 }
 
 export interface TradeJournalEntry {
@@ -43,6 +51,8 @@ export interface TradeJournalEntry {
   quantity: number
   price: number
   broker: string
+  stopLoss?: number
+  takeProfit?: number
   notes?: string
 }
 
@@ -108,7 +118,7 @@ export function useTrading(initialBroker: string = 'paper') {
         const response = await api.placeOrder(orderRequest, activeBroker)
 
         if (response.success) {
-          const successMsg = `${orderRequest.side} ${orderRequest.quantity} ${orderRequest.symbol} executed successfully!`
+          const successMsg = `${orderRequest.side} ${orderRequest.quantity} ${orderRequest.symbol} @ ${orderRequest.price || 'Market'} filled!`
           setLastOrderSuccess(successMsg)
 
           // Add to local journal
@@ -121,10 +131,12 @@ export function useTrading(initialBroker: string = 'paper') {
             quantity: orderRequest.quantity,
             price: response.order?.price || 0,
             broker: activeBroker.toUpperCase(),
+            stopLoss: orderRequest.stopLoss,
+            takeProfit: orderRequest.takeProfit,
           }
           setJournal((prev) => [newEntry, ...prev])
 
-          // Reload state
+          // Reload state immediately
           await Promise.all([
             loadPositions(),
             loadOrders(),
@@ -146,6 +158,27 @@ export function useTrading(initialBroker: string = 'paper') {
     [activeBroker, loadPositions, loadOrders, loadOrderHistory, loadBalances],
   )
 
+  // Modify position SL / TP
+  const modifyPosition = useCallback(
+    async (symbol: string, stopLoss?: number, takeProfit?: number) => {
+      setIsExecuting(true)
+      setError(null)
+      try {
+        const res = await api.modifyPosition(symbol, stopLoss, takeProfit, activeBroker)
+        setLastOrderSuccess(`Updated SL/TP for ${symbol}`)
+        await loadPositions()
+        return res
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Failed to modify SL/TP'
+        setError(msg)
+        throw err
+      } finally {
+        setIsExecuting(false)
+      }
+    },
+    [activeBroker, loadPositions],
+  )
+
   // Close position
   const closePosition = useCallback(
     async (symbol: string) => {
@@ -153,7 +186,7 @@ export function useTrading(initialBroker: string = 'paper') {
       setError(null)
       try {
         const response = await api.closePosition(symbol, activeBroker)
-        setLastOrderSuccess(`Position closed for ${symbol}`)
+        setLastOrderSuccess(`Closed position ${symbol}`)
         await Promise.all([
           loadPositions(),
           loadOrders(),
@@ -200,13 +233,13 @@ export function useTrading(initialBroker: string = 'paper') {
     ])
   }, [loadPositions, loadOrders, loadOrderHistory, loadBalances])
 
-  // Auto-refresh positions, orders, balances
+  // Auto-refresh positions, orders, balances every 1.5s
   useEffect(() => {
     refreshAll()
     const interval = setInterval(() => {
       loadPositions()
       loadBalances()
-    }, 2000)
+    }, 1500)
 
     return () => clearInterval(interval)
   }, [loadPositions, loadBalances, refreshAll, activeBroker])
@@ -216,7 +249,7 @@ export function useTrading(initialBroker: string = 'paper') {
     if (lastOrderSuccess) {
       const timeout = setTimeout(() => {
         setLastOrderSuccess(null)
-      }, 4000)
+      }, 3500)
       return () => clearTimeout(timeout)
     }
   }, [lastOrderSuccess])
@@ -243,6 +276,7 @@ export function useTrading(initialBroker: string = 'paper') {
     error,
     lastOrderSuccess,
     placeOrder,
+    modifyPosition,
     closePosition,
     cancelOrder,
     refreshAll,

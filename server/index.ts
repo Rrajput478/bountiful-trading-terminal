@@ -98,6 +98,27 @@ app.post('/api/order/:broker', async (request, reply) => {
   }
 })
 
+app.post('/api/position/modify/:broker', async (request, reply) => {
+  const { broker = 'paper' } = request.params as { broker: BrokerId }
+  const { symbol, stopLoss, takeProfit } = request.body as {
+    symbol: string
+    stopLoss?: number
+    takeProfit?: number
+  }
+
+  if (!symbol) {
+    return reply.status(400).send({ error: 'symbol is required to modify position' })
+  }
+
+  try {
+    const brokerAdapter = getBroker(broker)
+    const pos = await brokerAdapter.modifyPosition(symbol, stopLoss, takeProfit)
+    return { success: true, position: pos }
+  } catch (err: any) {
+    return reply.status(500).send({ error: err.message })
+  }
+})
+
 app.post('/api/position/close/:broker', async (request, reply) => {
   const { broker = 'paper' } = request.params as { broker: BrokerId }
   const { symbol } = request.body as { symbol: string }
