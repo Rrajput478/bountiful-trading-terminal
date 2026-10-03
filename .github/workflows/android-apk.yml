@@ -1,0 +1,98 @@
+name: Android APK
+
+# Builds the signed APK from the web app and publishes it as a GitHub Release.
+# Java and the Android SDK are preinstalled on ubuntu-latest, so nothing needs
+# to be installed on a developer machine.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'android/**'
+      - 'package.json'
+      - '.github/workflows/android-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.kts') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the web app
+        run: npm run build
+
+      - name: Confirm the bundle exists
+        run: |
+          test -f dist/index.html || { echo "::error::dist/index.html missing"; exit 1; }
+          echo "Bundle files: $(find dist -type f | wc -l)"
+
+      # working-directory does NOT flow between steps, and steps.<id>.outputs
+      # is just a string — so the APK path is emitted absolute and consumed by
+      # root-level steps.
+      - name: Assemble APK
+        id: apk
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+          APK=$(find "$GITHUB_WORKSPACE/android/app/build/outputs/apk/release" -name '*.apk' -print -quit)
+          if [ -z "$APK" ]; then
+            echo "::error::no APK produced"; exit 1
+          fi
+          SIZE=$(stat -c%s "$APK")
+          if [ "$SIZE" -lt 500000 ]; then
+            echo "::error::APK is only $SIZE bytes — web bundle was probably not copied"; exit 1
+          fi
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
+          echo "size=$SIZE" >> "$GITHUB_OUTPUT"
+
+      # A green build with a missing or unsigned output is not a success.
+      - name: Verify signature
+        run: |
+          "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner" \
+            verify --print-certs "${{ steps.apk.outputs.path }}" | head -10
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bountiful-apk
+          path: ${{ steps.apk.outputs.path }}
+
+      - name: Publish Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: apk-${{ github.run_number }}
+        run: |
+          gh release create "$TAG" \
+            "${{ steps.apk.outputs.path }}#Bountiful-Terminal-${{ steps.apk.outputs.size }}-bytes.apk" \
+            --title "Bountiful Terminal $TAG" \
+            --notes "Automated signed build. Install: download the APK, allow 'unknown sources' for your browser, open it."
