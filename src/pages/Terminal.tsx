@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTrading } from '../hooks/useTrading'
+import InstallPrompt from '../components/InstallPrompt'
 import type { OrderRequest, Position, ProtectionTarget, Timeframe } from '../types/trading'
 import { TIMEFRAMES } from '../types/trading'
 import ChartPanel from '../components/ChartPanel'
@@ -318,6 +319,8 @@ export default function Terminal() {
           </>
         )}
       </main>
+
+      <InstallPrompt />
 
       <div className="toasts" aria-live="polite">
         {t.toasts.map((x) => (

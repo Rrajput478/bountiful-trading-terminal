@@ -1146,3 +1146,60 @@ body {
     max-height: 32dvh;
   }
 }
+/* ------------------------------------------------------------ install prompt */
+/* Sits above the terminal content but below toasts. Safe-area aware so it is
+   not hidden behind the iPhone home indicator or a gesture bar. */
+.install-bar {
+  position: fixed;
+  left: 10px;
+  right: 10px;
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card, #12161f);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+.install-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.install-text strong {
+  font-size: 13px;
+  color: var(--foreground);
+}
+
+.install-text span {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted-foreground);
+}
+
+.install-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* In landscape on a phone the bar would eat the chart; keep it compact. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .install-bar {
+    left: auto;
+    right: calc(8px + env(safe-area-inset-right, 0px));
+    bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    max-width: 280px;
+  }
+  .install-text span {
+    display: none;
+  }
+}
