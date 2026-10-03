@@ -170,3 +170,17 @@
     padding: 26px 22px;
   }
 }
+.login-error {
+  margin: 2px 0 4px;
+  color: #f87171;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.login-note {
+  margin: 10px 0 0;
+  color: var(--muted-foreground, #8b93a3);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}

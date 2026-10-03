@@ -1,178 +1,125 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import * as api from '../services/api'
+import type { BrokerInfo } from '../types/trading'
 import './Connectbroker.css'
 
-interface BrokerOption {
-  id: 'paper' | 'upstox' | 'coindcx'
-  name: string
-  subtitle: string
-  tag: string
-  tagColor: string
-  icon: string
-  fields: { name: string; label: string; placeholder: string; type: string }[]
-}
-
-const BROKERS: BrokerOption[] = [
-  {
-    id: 'paper',
-    name: 'Paper Trading Terminal',
-    subtitle: 'Zero Risk Sandbox with $100,000 Virtual Capital',
-    tag: 'Instant Demo',
-    tagColor: '#35d07f',
-    icon: '⚡',
-    fields: [],
-  },
-  {
-    id: 'upstox',
-    name: 'Upstox Pro V2',
-    subtitle: 'NSE / BSE Equities, NIFTY & BANKNIFTY Options',
-    tag: 'Indian Markets',
-    tagColor: '#6366f1',
-    icon: '📈',
-    fields: [
-      { name: 'apiKey', label: 'API Key (Client ID)', placeholder: 'e.g. 5a1b2c3d-...', type: 'text' },
-      { name: 'apiSecret', label: 'API Secret', placeholder: 'Enter API Secret key', type: 'password' },
-      { name: 'accessToken', label: 'Access Token (Optional / Demo fallback)', placeholder: 'Bearer token if active', type: 'password' },
-    ],
-  },
-  {
-    id: 'coindcx',
-    name: 'CoinDCX Pro',
-    subtitle: 'High-speed Crypto Spot & Futures Trading',
-    tag: 'Crypto Markets',
-    tagColor: '#f59e0b',
-    icon: '🪙',
-    fields: [
-      { name: 'apiKey', label: 'CoinDCX API Key', placeholder: 'Enter CoinDCX API Key', type: 'text' },
-      { name: 'apiSecret', label: 'API Secret', placeholder: 'Enter API Secret', type: 'password' },
-    ],
-  },
-]
-
-function Connectbroker() {
+/**
+ * Broker selection. Paper Trading is the only enabled option.
+ *
+ * Live brokers are listed so the architecture is visible, but they are shown as
+ * unavailable: credentials live in backend environment variables only (§30), so
+ * nothing secret is ever typed into the browser.
+ */
+export default function Connectbroker() {
   const navigate = useNavigate()
-  const [selectedBroker, setSelectedBroker] = useState<'paper' | 'upstox' | 'coindcx'>('paper')
-  const [credentials, setCredentials] = useState<Record<string, string>>({})
-  const [isConnecting, setIsConnecting] = useState(false)
-  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [brokers, setBrokers] = useState<BrokerInfo[]>([])
+  const [selected, setSelected] = useState('paper')
+  const [connecting, setConnecting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const activeOption = BROKERS.find((b) => b.id === selectedBroker) || BROKERS[0]
+  useEffect(() => {
+    let alive = true
+    api
+      .getBrokers()
+      .then((list) => {
+        if (!alive) return
+        setBrokers(list)
+        const paper = list.find((b) => b.id === 'paper')
+        if (paper) setSelected('paper')
+      })
+      .catch((e: unknown) => {
+        if (alive) setError(e instanceof Error ? e.message : 'Cannot reach the server')
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
 
-  const handleInputChange = (field: string, val: string) => {
-    setCredentials((prev) => ({ ...prev, [field]: val }))
-  }
-
-  const handleConnect = async () => {
-    setIsConnecting(true)
-    setErrorMsg(null)
+  const start = async () => {
+    // Guard the submit path itself: a disabled option must never reach the API,
+    // even if selection was changed outside the UI.
+    const chosen = brokers.find((b) => b.id === selected)
+    if (!chosen?.enabled) {
+      setError(
+        chosen
+          ? `${chosen.name} is not available yet. ${chosen.description}.`
+          : 'Select a broker to continue.',
+      )
+      return
+    }
+    setConnecting(true)
+    setError(null)
     try {
-      await api.connectBroker(selectedBroker, credentials)
-      localStorage.setItem('active_broker', selectedBroker)
-      navigate(`/terminal?broker=${selectedBroker}`)
-    } catch (err: any) {
-      // In demo mode, fallback to terminal with demo state
-      localStorage.setItem('active_broker', selectedBroker)
-      navigate(`/terminal?broker=${selectedBroker}`)
+      await api.post<{ success: boolean }>('/broker/connect', { broker: selected })
+      localStorage.setItem('bountiful.broker', selected)
+      navigate('/terminal')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not connect')
     } finally {
-      setIsConnecting(false)
+      setConnecting(false)
     }
   }
 
   return (
     <div className="broker-page">
       <main className="broker-card">
-        <div className="broker-icon">🚀</div>
-        <div className="broker-step">STEP 2 OF 2 • BROKER SETUP</div>
-        <h1>Select & Connect Broker</h1>
+        <div className="broker-step">STEP 2 OF 2 · BROKER SETUP</div>
+        <h1>Select a Broker</h1>
         <p className="broker-description">
-          Trade Indian Equities, F&O or Crypto with lightning-fast execution and real-time P&L analytics.
+          Bountiful starts in paper mode. Live brokers stay disabled until their API
+          integration is implemented and configured on the server.
         </p>
 
-        {/* Broker Selector List */}
         <div className="broker-grid">
-          {BROKERS.map((broker) => {
-            const isSelected = selectedBroker === broker.id
+          {brokers.map((b) => {
+            const enabled = b.enabled !== false
+            const isSelected = selected === b.id
             return (
-              <div
-                key={broker.id}
-                className={`broker-option ${isSelected ? 'selected' : ''}`}
-                onClick={() => setSelectedBroker(broker.id)}
+              <button
+                type="button"
+                key={b.id}
+                className={`broker-option${isSelected ? ' selected' : ''}${enabled ? '' : ' disabled'}`}
+                onClick={() => enabled && setSelected(b.id)}
+                disabled={!enabled}
               >
                 <div className="broker-option-left">
-                  <div className="broker-logo">{broker.icon}</div>
+                  <div className="broker-logo">{b.id === 'paper' ? '⚡' : '🔌'}</div>
                   <div>
                     <div className="broker-name-row">
-                      <span className="broker-name">{broker.name}</span>
-                      <span className="broker-badge" style={{ color: broker.tagColor, borderColor: broker.tagColor }}>
-                        {broker.tag}
+                      <span className="broker-name">{b.name}</span>
+                      <span className={`broker-tag ${b.isLive ? 'live' : 'paper'}`}>
+                        {b.isLive ? 'LIVE' : 'PAPER'}
                       </span>
                     </div>
-                    <div className="broker-status">{broker.subtitle}</div>
+                    <div className="broker-sub">{b.description}</div>
+                    {!enabled && (
+                      <div className="broker-note">
+                        Not implemented — set {b.id.toUpperCase()}_API_KEY on the backend
+                      </div>
+                    )}
                   </div>
                 </div>
-                <div className="broker-radio">
-                  <input
-                    type="radio"
-                    name="brokerSelect"
-                    checked={isSelected}
-                    onChange={() => setSelectedBroker(broker.id)}
-                  />
-                </div>
-              </div>
+              </button>
             )
           })}
         </div>
 
-        {/* Form Inputs for Live Keys (if selected has fields) */}
-        {activeOption.fields.length > 0 && (
-          <div className="broker-credential-form">
-            <div className="form-header">
-              <span>Enter {activeOption.name} Credentials (Optional for Demo Mode)</span>
-            </div>
-            {activeOption.fields.map((f) => (
-              <div key={f.name} className="form-group">
-                <label>{f.label}</label>
-                <input
-                  type={f.type}
-                  placeholder={f.placeholder}
-                  value={credentials[f.name] || ''}
-                  onChange={(e) => handleInputChange(f.name, e.target.value)}
-                />
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="security-note">
-          <span>🔒</span>
-          <div>
-            <strong>Ultra-Low Latency & High Security</strong>
-            <p>
-              Your credentials are processed locally and never stored in plain text. You can toggle between Demo and Live execution anytime.
-            </p>
-          </div>
-        </div>
-
-        {errorMsg && <div className="broker-error-banner">{errorMsg}</div>}
+        {error && <div className="broker-error">{error}</div>}
 
         <button
-          className="connect-button"
-          onClick={handleConnect}
-          disabled={isConnecting}
+          type="button"
+          className="broker-submit"
+          onClick={start}
+          disabled={connecting || !selected}
         >
-          {isConnecting
-            ? 'Connecting...'
-            : `Launch Terminal with ${activeOption.name}`}
-          <span>→</span>
+          {connecting ? 'Connecting…' : 'Enter Terminal'}
         </button>
 
-        <Link to="/login" className="back-link">
-          ← Back to Login
+        <Link className="broker-back" to="/login">
+          ← Back
         </Link>
       </main>
     </div>
   )
 }
-
-export default Connectbroker

@@ -22,3 +22,13 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# QA artifacts
+qa*.mjs
+ticktest*.mjs
+probe*.mjs
+shots/
+
+.env
+.env.local
+.env.*.local

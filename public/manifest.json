@@ -1,16 +1,37 @@
 {
   "short_name": "Bountiful",
   "name": "Bountiful Trading Terminal",
+  "description": "A personalised trading terminal: fast market observation, chart-based execution and position management. Paper trading by default.",
+  "id": "/terminal",
   "icons": [
+    {
+      "src": "/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "maskable"
+    },
     {
       "src": "/favicon.svg",
       "type": "image/svg+xml",
-      "sizes": "192x192 512x512"
+      "sizes": "any"
     }
   ],
   "start_url": "/terminal",
+  "scope": "/",
   "background_color": "#080b10",
-  "theme_color": "#10b981",
+  "theme_color": "#080b10",
   "display": "standalone",
-  "orientation": "portrait-primary"
+  "orientation": "any"
 }

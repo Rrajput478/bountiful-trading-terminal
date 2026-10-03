@@ -1,284 +1,327 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import * as api from '../services/api'
+import type {
+  Account,
+  Balance,
+  Candle,
+  Order,
+  OrderRequest,
+  Position,
+  Quote,
+  SymbolSpec,
+  Timeframe,
+  Trade,
+} from '../types/trading'
 
-export interface Position {
-  symbol: string
-  side: 'LONG' | 'SHORT'
-  quantity: number
-  entryPrice: number
-  currentPrice: number
-  pnl: number
-  pnlPercentage?: number
-  leverage?: number
-  margin?: number
-  liquidationPrice?: number
-  stopLoss?: number
-  takeProfit?: number
+const QUOTE_MS = 1000
+const STATE_MS = 1500
+
+export interface Toast {
+  id: number
+  kind: 'success' | 'error' | 'info'
+  message: string
 }
 
-export interface Order {
-  id: string
-  symbol: string
-  side: 'BUY' | 'SELL'
-  type: 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT'
-  quantity: number
-  filledQuantity: number
-  price?: number
-  stopPrice?: number
-  stopLoss?: number
-  takeProfit?: number
-  status: 'OPEN' | 'PARTIALLY_FILLED' | 'FILLED' | 'CANCELLED' | 'REJECTED'
-  timestamp: number
-  closeReason?: 'MANUAL' | 'TAKE_PROFIT' | 'STOP_LOSS' | 'LIQUIDATION'
-}
-
-export interface Balance {
-  asset: string
-  available: number
-  locked: number
-  total: number
-  equity?: number
-  freeMargin?: number
-  marginLevel?: number
-}
-
-export interface TradeJournalEntry {
-  id: string
-  timestamp: number
-  symbol: string
-  side: 'BUY' | 'SELL'
-  type: string
-  quantity: number
-  price: number
-  broker: string
-  stopLoss?: number
-  takeProfit?: number
-  notes?: string
-}
-
-export function useTrading(initialBroker: string = 'paper') {
-  const [activeBroker, setActiveBroker] = useState<string>(initialBroker)
+export function useTrading() {
+  const [quotes, setQuotes] = useState<Record<string, Quote>>({})
+  const [candles, setCandles] = useState<Candle[]>([])
   const [positions, setPositions] = useState<Position[]>([])
   const [orders, setOrders] = useState<Order[]>([])
-  const [orderHistory, setOrderHistory] = useState<Order[]>([])
-  const [balances, setBalances] = useState<Balance[]>([])
-  const [journal, setJournal] = useState<TradeJournalEntry[]>([])
-  const [isExecuting, setIsExecuting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [lastOrderSuccess, setLastOrderSuccess] = useState<string | null>(null)
+  const [history, setHistory] = useState<Order[]>([])
+  const [journal, setJournal] = useState<Trade[]>([])
+  const [balance, setBalance] = useState<Balance | null>(null)
+  const [account, setAccount] = useState<Account | null>(null)
+  const [symbols, setSymbols] = useState<SymbolSpec[]>([])
+  const [activeSymbol, setActiveSymbol] = useState('BTC/USDT')
+  const [timeframe, setTimeframe] = useState<Timeframe>('1m')
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [toasts, setToasts] = useState<Toast[]>([])
 
-  // Load positions
-  const loadPositions = useCallback(async () => {
-    try {
-      const response = await api.getPositions(activeBroker)
-      setPositions(Array.isArray(response) ? response : [])
-    } catch (err) {
-      console.error('Failed to load positions:', err)
-    }
-  }, [activeBroker])
+  // Refs keep the poll loops free of dependency churn (§28 performance).
+  // Mirrored in an effect rather than during render, so no ref is read while
+  // rendering and a symbol switch always reaches the next poll tick.
+  const symbolRef = useRef(activeSymbol)
+  const tfRef = useRef(timeframe)
+  useEffect(() => {
+    symbolRef.current = activeSymbol
+  }, [activeSymbol])
+  useEffect(() => {
+    tfRef.current = timeframe
+  }, [timeframe])
 
-  // Load open orders
-  const loadOrders = useCallback(async () => {
-    try {
-      const response = await api.getOpenOrders(activeBroker)
-      setOrders(Array.isArray(response) ? response : [])
-    } catch (err) {
-      console.error('Failed to load orders:', err)
-    }
-  }, [activeBroker])
+  const toastSeq = useRef(0)
+  const notify = useCallback((kind: Toast['kind'], message: string) => {
+    const id = ++toastSeq.current
+    setToasts((t) => [...t, { id, kind, message }])
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4000)
+  }, [])
 
-  // Load order history
-  const loadOrderHistory = useCallback(async () => {
-    try {
-      const response = await api.getOrderHistory(activeBroker)
-      setOrderHistory(Array.isArray(response) ? response : [])
-    } catch (err) {
-      console.error('Failed to load order history:', err)
-    }
-  }, [activeBroker])
+  const dismissToast = useCallback((id: number) => {
+    setToasts((t) => t.filter((x) => x.id !== id))
+  }, [])
 
-  // Load balances
-  const loadBalances = useCallback(async () => {
-    try {
-      const response = await api.getBalances(activeBroker)
-      setBalances(Array.isArray(response) ? response : [])
-    } catch (err) {
-      console.error('Failed to load balances:', err)
-    }
-  }, [activeBroker])
+  // ---------------------------------------------------------------- bootstrap
 
-  // Place order
-  const placeOrder = useCallback(
-    async (orderRequest: api.OrderRequest) => {
-      setIsExecuting(true)
-      setError(null)
-      setLastOrderSuccess(null)
-
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
       try {
-        const response = await api.placeOrder(orderRequest, activeBroker)
-
-        if (response.success) {
-          const successMsg = `${orderRequest.side} ${orderRequest.quantity} ${orderRequest.symbol} @ ${orderRequest.price || 'Market'} filled!`
-          setLastOrderSuccess(successMsg)
-
-          // Add to local journal
-          const newEntry: TradeJournalEntry = {
-            id: response.order?.id || `JRN-${Date.now()}`,
-            timestamp: Date.now(),
-            symbol: orderRequest.symbol,
-            side: orderRequest.side,
-            type: orderRequest.type,
-            quantity: orderRequest.quantity,
-            price: response.order?.price || 0,
-            broker: activeBroker.toUpperCase(),
-            stopLoss: orderRequest.stopLoss,
-            takeProfit: orderRequest.takeProfit,
-          }
-          setJournal((prev) => [newEntry, ...prev])
-
-          // Reload state immediately
-          await Promise.all([
-            loadPositions(),
-            loadOrders(),
-            loadOrderHistory(),
-            loadBalances(),
-          ])
-        }
-
-        return response
+        const [syms, acct, bal, pos, ord, hist, jrn] = await Promise.all([
+          api.getSymbols(),
+          api.getAccount(),
+          api.getBalances(),
+          api.getPositions(),
+          api.getOpenOrders(),
+          api.getOrderHistory(),
+          api.getJournal(),
+        ])
+        if (!alive) return
+        setSymbols(syms)
+        setAccount(acct)
+        setBalance(bal[0] ?? null)
+        setPositions(pos)
+        setOrders(ord)
+        setHistory(hist)
+        setJournal(jrn)
       } catch (err) {
-        const errorMessage =
-          err instanceof Error ? err.message : 'Order execution failed'
-        setError(errorMessage)
-        throw err
+        notify('error', err instanceof Error ? err.message : 'Failed to load account')
       } finally {
-        setIsExecuting(false)
+        if (alive) setLoading(false)
       }
-    },
-    [activeBroker, loadPositions, loadOrders, loadOrderHistory, loadBalances],
-  )
+    })()
+    return () => {
+      alive = false
+    }
+  }, [notify])
 
-  // Modify position SL / TP
-  const modifyPosition = useCallback(
-    async (symbol: string, stopLoss?: number, takeProfit?: number) => {
-      setIsExecuting(true)
-      setError(null)
+  // ---------------------------------------------------------------- quote polling
+
+  useEffect(() => {
+    let alive = true
+    let timer: number
+
+    const poll = async () => {
       try {
-        const res = await api.modifyPosition(symbol, stopLoss, takeProfit, activeBroker)
-        setLastOrderSuccess(`Updated SL/TP for ${symbol}`)
-        await loadPositions()
+        const list = await api.getQuotes()
+        if (!alive) return
+        const next: Record<string, Quote> = {}
+        for (const q of list) next[q.symbol] = q
+        // keep the active symbol populated even if it is not in the list
+        if (!next[symbolRef.current]) {
+          const q = await api.getQuote(symbolRef.current)
+          next[q.symbol] = q
+        }
+        setQuotes(next)
+      } catch {
+        /* transient: keep last known prices */
+      }
+    }
+
+    poll()
+    timer = window.setInterval(poll, QUOTE_MS)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  // ---------------------------------------------------------------- candle polling
+
+  useEffect(() => {
+    let alive = true
+    const load = async () => {
+      try {
+        const data = await api.getCandles(activeSymbol, timeframe, 200)
+        if (alive) setCandles(data)
+      } catch {
+        /* transient */
+      }
+    }
+    load()
+    const timer = window.setInterval(load, 2000)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [activeSymbol, timeframe])
+
+  // ---------------------------------------------------------------- state polling
+
+  const refreshAccountState = useCallback(async () => {
+    const [pos, bal] = await Promise.all([api.getPositions(), api.getBalances()])
+    setPositions(pos)
+    setBalance(bal[0] ?? null)
+  }, [])
+
+  useEffect(() => {
+    let alive = true
+    const poll = async () => {
+      try {
+        const [pos, bal, ord] = await Promise.all([
+          api.getPositions(),
+          api.getBalances(),
+          api.getOpenOrders(),
+        ])
+        if (!alive) return
+        setPositions(pos)
+        setBalance(bal[0] ?? null)
+        setOrders(ord)
+      } catch {
+        /* transient */
+      }
+    }
+    poll()
+    const timer = window.setInterval(poll, STATE_MS)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  const refreshAll = useCallback(async () => {
+    const [pos, ord, hist, jrn, bal] = await Promise.all([
+      api.getPositions(),
+      api.getOpenOrders(),
+      api.getOrderHistory(),
+      api.getJournal(),
+      api.getBalances(),
+    ])
+    setPositions(pos)
+    setOrders(ord)
+    setHistory(hist)
+    setJournal(jrn)
+    setBalance(bal[0] ?? null)
+  }, [])
+
+  // ---------------------------------------------------------------- actions
+
+  const executeOrder = useCallback(
+    async (req: OrderRequest) => {
+      setBusy(true)
+      try {
+        const res = await api.placeOrder(req)
+        await refreshAll()
+        const o = res.order
+        if (o.status === 'FILLED') {
+          notify(
+            'success',
+            `${o.side} ${o.quantity} ${o.symbol} filled @ ${fmt(o.price)}${
+              o.leverage ? ` · ${o.leverage}x` : ''
+            }`,
+          )
+        } else {
+          notify('info', `${o.type} order placed for ${o.symbol}`)
+        }
         return res
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Failed to modify SL/TP'
-        setError(msg)
+        notify('error', err instanceof Error ? err.message : 'Order failed')
         throw err
       } finally {
-        setIsExecuting(false)
+        setBusy(false)
       }
     },
-    [activeBroker, loadPositions],
+    [notify, refreshAll],
   )
 
-  // Close position
-  const closePosition = useCallback(
-    async (symbol: string) => {
-      setIsExecuting(true)
-      setError(null)
+  const applyProtection = useCallback(
+    async (symbol: string, stopLoss: number | null, takeProfit: number | null) => {
+      setBusy(true)
       try {
-        const response = await api.closePosition(symbol, activeBroker)
-        setLastOrderSuccess(`Closed position ${symbol}`)
-        await Promise.all([
-          loadPositions(),
-          loadOrders(),
-          loadOrderHistory(),
-          loadBalances(),
-        ])
-        return response
+        const res = await api.setProtection(symbol, stopLoss, takeProfit)
+        await refreshAccountState()
+        notify('success', 'Protection modified')
+        return res
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Failed to close position'
-        setError(msg)
+        notify('error', err instanceof Error ? err.message : 'Could not update protection')
         throw err
       } finally {
-        setIsExecuting(false)
+        setBusy(false)
       }
     },
-    [activeBroker, loadPositions, loadOrders, loadOrderHistory, loadBalances],
+    [notify, refreshAccountState],
   )
 
-  // Cancel order
+  const closePosition = useCallback(
+    async (symbol: string, quantity?: number) => {
+      setBusy(true)
+      try {
+        const res = await api.closePosition(symbol, quantity)
+        await refreshAll()
+        const pnl = res.order.realizedPnl
+        const closedQty = res.order.quantity
+        notify(
+          'success',
+          `Closed ${closedQty} ${symbol}${pnl !== undefined ? ` · ${pnl >= 0 ? '+' : ''}${fmt(pnl)}` : ''}`,
+        )
+        return res
+      } catch (err) {
+        notify('error', err instanceof Error ? err.message : 'Could not close position')
+        throw err
+      } finally {
+        setBusy(false)
+      }
+    },
+    [notify, refreshAll],
+  )
+
   const cancelOrder = useCallback(
     async (orderId: string) => {
       try {
-        await api.cancelOrder(orderId, activeBroker)
-        setLastOrderSuccess(`Order ${orderId} cancelled`)
-        await loadOrders()
-        await loadOrderHistory()
+        await api.cancelOrder(orderId)
+        await refreshAll()
+        notify('info', `Order ${orderId} cancelled`)
       } catch (err) {
-        const errorMessage =
-          err instanceof Error ? err.message : 'Failed to cancel order'
-        setError(errorMessage)
-        throw err
+        notify('error', err instanceof Error ? err.message : 'Could not cancel order')
       }
     },
-    [activeBroker, loadOrders, loadOrderHistory],
+    [notify, refreshAll],
   )
 
-  // Refresh all data
-  const refreshAll = useCallback(async () => {
-    await Promise.all([
-      loadPositions(),
-      loadOrders(),
-      loadOrderHistory(),
-      loadBalances(),
-    ])
-  }, [loadPositions, loadOrders, loadOrderHistory, loadBalances])
-
-  // Auto-refresh positions, orders, balances every 1.5s
-  useEffect(() => {
-    refreshAll()
-    const interval = setInterval(() => {
-      loadPositions()
-      loadBalances()
-    }, 1500)
-
-    return () => clearInterval(interval)
-  }, [loadPositions, loadBalances, refreshAll, activeBroker])
-
-  // Clear success notification
-  useEffect(() => {
-    if (lastOrderSuccess) {
-      const timeout = setTimeout(() => {
-        setLastOrderSuccess(null)
-      }, 3500)
-      return () => clearTimeout(timeout)
+  const resetAccount = useCallback(async () => {
+    try {
+      const res = await api.resetPaperAccount()
+      await refreshAll()
+      notify('info', res.message)
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Reset failed')
     }
-  }, [lastOrderSuccess])
+  }, [notify, refreshAll])
 
-  // Clear error notification
-  useEffect(() => {
-    if (error) {
-      const timeout = setTimeout(() => {
-        setError(null)
-      }, 5000)
-      return () => clearTimeout(timeout)
-    }
-  }, [error])
+  const selectSymbol = useCallback((symbol: string) => {
+    setActiveSymbol(symbol)
+  }, [])
 
   return {
-    activeBroker,
-    setActiveBroker,
+    quotes,
+    candles,
     positions,
     orders,
-    orderHistory,
-    balances,
+    history,
     journal,
-    isExecuting,
-    error,
-    lastOrderSuccess,
-    placeOrder,
-    modifyPosition,
+    balance,
+    account,
+    symbols,
+    activeSymbol,
+    timeframe,
+    loading,
+    busy,
+    toasts,
+    notify,
+    dismissToast,
+    executeOrder,
+    applyProtection,
     closePosition,
     cancelOrder,
+    resetAccount,
     refreshAll,
+    refreshAccountState,
+    setTimeframe,
+    selectSymbol,
   }
+}
+
+function fmt(n?: number): string {
+  if (n === undefined || !Number.isFinite(n)) return '—'
+  return n.toLocaleString('en-US', { maximumFractionDigits: 4 })
 }

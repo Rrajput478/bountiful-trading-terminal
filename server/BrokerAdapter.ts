@@ -45,6 +45,7 @@ export interface OrderBook {
 }
 
 export interface Position {
+  id: string
   symbol: string
   side: 'LONG' | 'SHORT'
   quantity: number
@@ -55,9 +56,12 @@ export interface Position {
   leverage?: number
   margin?: number
   liquidationPrice?: number
-  stopLoss?: number
-  takeProfit?: number
-}
+    stopLoss?: number
+    takeProfit?: number
+    openedAt?: number
+  }
+
+  export type SizeMode = 'LOT' | 'QUANTITY' | 'MARGIN'
 
 export interface OrderRequest {
   symbol: string
@@ -69,6 +73,19 @@ export interface OrderRequest {
   stopLoss?: number
   takeProfit?: number
   leverage?: number
+}
+
+export interface SizePreview {
+  mode: SizeMode
+  input: number
+  quantity: number
+  notional: number
+  initialMargin: number
+  estimatedFee: number
+  lotSize: number
+  minQuantity: number
+  maxQuantity: number
+  quantityStep: number
 }
 
 export interface Order {
@@ -85,6 +102,28 @@ export interface Order {
   status: OrderStatus
   timestamp: number
   closeReason?: 'MANUAL' | 'TAKE_PROFIT' | 'STOP_LOSS' | 'LIQUIDATION'
+  leverage?: number
+  margin?: number
+  fee?: number
+  realizedPnl?: number
+  entryPrice?: number
+  exitPrice?: number
+  positionSide?: 'LONG' | 'SHORT'
+}
+
+export interface Trade {
+  id: string
+  symbol: string
+  side: 'LONG' | 'SHORT'
+  quantity: number
+  entryPrice: number
+  exitPrice: number
+  pnl: number
+  fee: number
+  closeReason: Order['closeReason']
+  openedAt: number
+  closedAt: number
+  durationMs: number
 }
 
 export interface Account {
@@ -131,10 +170,26 @@ export interface BrokerAdapter {
 
   placeOrder(order: OrderRequest): Promise<Order>
   cancelOrder(orderId: string): Promise<void>
-  closePosition(symbol: string, reason?: 'MANUAL' | 'TAKE_PROFIT' | 'STOP_LOSS'): Promise<Order>
+  /**
+   * Closes `quantity` of the position for `symbol`. Passing no quantity (or the
+   * full size) closes it entirely; a smaller quantity reduces it. Never reverses.
+   */
+  closePosition(
+    symbol: string,
+    quantity?: number,
+    reason?: 'MANUAL' | 'TAKE_PROFIT' | 'STOP_LOSS',
+  ): Promise<Order>
   modifyPosition(symbol: string, stopLoss?: number, takeProfit?: number): Promise<Position>
 
   getOpenOrders(): Promise<Order[]>
   getPositions(): Promise<Position[]>
   getOrderHistory(): Promise<Order[]>
+  getTrades(): Promise<Trade[]>
+
+  previewSize(
+    symbol: string,
+    mode: SizeMode,
+    input: number,
+    leverage: number,
+  ): Promise<SizePreview>
 }
