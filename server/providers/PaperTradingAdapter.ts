@@ -1,3 +1,6 @@
+import fs from 'node:fs'
+import path from 'node:path'
+
 import type { Account, Balance, BrokerAdapter, BrokerCapabilities, BrokerId, Order, OrderBook, OrderRequest, OrderType, Position, Quote, SizeMode, SizePreview, Trade } from '../BrokerAdapter'
 
 import { PaperMarketDataProvider } from '../market-data/PaperMarketDataProvider'
@@ -6,6 +9,67 @@ import type { SymbolSpec } from '../market-data/PaperMarketDataProvider'
 export const STARTING_BALANCE = 10000
 const TAKER_FEE_RATE = 0.0004 // 0.04% per side, paper approximation
 const MAKER_FEE_RATE = 0.0002
+
+/**
+ * Durable snapshot of the paper account.
+ *
+ * The paper engine keeps its state in memory, so a server restart or a
+ * redeploy would silently reset the balance, open positions and trade journal.
+ * Persisting to disk keeps the account intact across restarts, which matters
+ * once the terminal runs on a hosted environment rather than a laptop.
+ */
+interface PaperSnapshot {
+  version: 1
+  orders: Order[]
+  positions: Position[]
+  trades: Trade[]
+  cash: number
+  realizedPnl: number
+  /** Seed for the market walk so candles stay continuous after a restart. */
+  marketSeed?: number
+}
+
+function resolveStatePath(): string | null {
+  // A read-only or serverless filesystem must not stop the engine from running.
+  if (process.env.PAPER_STATE_PATH === 'off') return null
+  return (
+    process.env.PAPER_STATE_PATH ||
+    path.join(process.cwd(), 'data', 'paper-state.json')
+  )
+}
+
+/**
+ * Debounced atomic write.
+ *
+ * Writes go to a temp file and are renamed, so a crash mid-write can never
+ * leave a half-written JSON file that fails to parse on the next boot.
+ */
+function writeSnapshot(file: string, snapshot: PaperSnapshot): void {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    const tmp = `${file}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify(snapshot), 'utf8')
+    fs.renameSync(tmp, file)
+  } catch (err) {
+    // Losing persistence is not a reason to refuse to trade, but it should be
+    // visible in the logs.
+    console.warn('Paper state could not be saved:', (err as Error).message)
+  }
+}
+
+function readSnapshot(file: string | null): PaperSnapshot | null {
+  if (!file) return null
+  try {
+    if (!fs.existsSync(file)) return null
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as PaperSnapshot
+    if (parsed?.version !== 1) return null
+    return parsed
+  } catch (err) {
+    // A corrupt file must not prevent startup; fall back to a fresh account.
+    console.warn('Paper state unreadable, starting fresh:', (err as Error).message)
+    return null
+  }
+}
 
 export class PaperTradingAdapter implements BrokerAdapter {
   id: BrokerId = 'paper'
@@ -29,8 +93,45 @@ export class PaperTradingAdapter implements BrokerAdapter {
 
   private marketData: PaperMarketDataProvider
 
+  private stateFile: string | null
+  private saveTimer: NodeJS.Timeout | null = null
+
   constructor(marketData: PaperMarketDataProvider = new PaperMarketDataProvider()) {
     this.marketData = marketData
+    this.stateFile = resolveStatePath()
+
+    // Restore the previous session so restarts and redeploys do not wipe the
+    // account.
+    const saved = readSnapshot(this.stateFile)
+    if (saved) {
+      this.orders = saved.orders ?? []
+      this.positions = saved.positions ?? []
+      this.trades = saved.trades ?? []
+      this.cash = typeof saved.cash === 'number' ? saved.cash : STARTING_BALANCE
+      this.realizedPnl = saved.realizedPnl ?? 0
+    }
+  }
+
+  /**
+   * Schedule a save. Writes are batched because a tick can touch many
+   * positions, and a synchronous write on every tick would be wasteful.
+   */
+  private persist(): void {
+    if (!this.stateFile) return
+    if (this.saveTimer) return
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null
+      writeSnapshot(this.stateFile!, {
+        version: 1,
+        orders: this.orders,
+        positions: this.positions,
+        trades: this.trades,
+        cash: this.cash,
+        realizedPnl: this.realizedPnl,
+      })
+    }, 250)
+    // Never keep the process alive just to flush a snapshot.
+    this.saveTimer.unref?.()
   }
 
   async connect(): Promise<boolean> {
@@ -140,6 +241,7 @@ export class PaperTradingAdapter implements BrokerAdapter {
 
     const errors = validateOrder(req, quote, spec, this.connected)
     if (errors.length > 0) throw new Error(errors[0])
+    this.persist()
 
     const leverage = clamp(req.leverage || 1, 1, spec.leverageMax)
     const pending = isPending(req.type)
@@ -312,6 +414,7 @@ export class PaperTradingAdapter implements BrokerAdapter {
   ): Promise<Position> {
     const pos = this.positions.find((p) => p.symbol === symbol)
     if (!pos) throw new Error(`No active position for ${symbol}`)
+    this.persist()
 
     const quote = await this.getQuote(symbol)
     const errs = validateProtection(pos.side, quote, stopLoss, takeProfit, pos.entryPrice)
@@ -332,6 +435,7 @@ export class PaperTradingAdapter implements BrokerAdapter {
   ): Promise<Order> {
     const idx = this.positions.findIndex((p) => p.symbol === symbol)
     if (idx === -1) throw new Error(`No active position found for ${symbol}`)
+    this.persist()
 
     const pos = this.positions[idx]
     const quote = await this.getQuote(symbol)
@@ -412,6 +516,7 @@ export class PaperTradingAdapter implements BrokerAdapter {
     if (order.status === 'CANCELLED') throw new Error('Order already cancelled')
     if (order.margin) this.cash += order.margin // release reservation
     order.status = 'CANCELLED'
+    this.persist()
   }
 
   /** Fills pending orders whose trigger price has been touched. */
@@ -553,6 +658,25 @@ export class PaperTradingAdapter implements BrokerAdapter {
     this.trades = []
     this.cash = STARTING_BALANCE
     this.realizedPnl = 0
+    this.persist()
+  }
+
+  /** Flush any pending debounced write immediately. Used on shutdown. */
+  flush(): void {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer)
+      this.saveTimer = null
+    }
+    if (this.stateFile) {
+      writeSnapshot(this.stateFile, {
+        version: 1,
+        orders: this.orders,
+        positions: this.positions,
+        trades: this.trades,
+        cash: this.cash,
+        realizedPnl: this.realizedPnl,
+      })
+    }
   }
 }
 

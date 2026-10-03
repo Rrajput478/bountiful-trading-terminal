@@ -1,5 +1,8 @@
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
+import fastifyStatic from '@fastify/static'
+import fs from 'node:fs'
+import path from 'node:path'
 import type { BrokerId, OrderRequest, SizeMode } from './BrokerAdapter'
 import { getBroker, listBrokers, sharedMarketData } from './BrokerFactory'
 import { PaperTradingAdapter } from './providers/PaperTradingAdapter'
@@ -10,6 +13,37 @@ await app.register(cors, {
   origin: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
 })
+
+/*
+ * Serve the built frontend from this same process.
+ *
+ * A hosted deployment should run one Node process on one port rather than a
+ * separate static host plus an API, which keeps the /api paths same-origin and
+ * removes a proxy layer that would otherwise break service worker scope.
+ */
+const DIST_DIR = path.join(process.cwd(), 'dist')
+if (fs.existsSync(DIST_DIR)) {
+  await app.register(fastifyStatic, {
+    root: DIST_DIR,
+    prefix: '/',
+    index: ['index.html'],
+  })
+
+  // Client-side routing: any non-API GET returns the SPA shell so deep links
+  // like /terminal work on a hard refresh or a cold install.
+  app.setNotFoundHandler((request, reply) => {
+    if (request.url.startsWith('/api')) {
+      return reply.status(404).send({ error: 'Not found' })
+    }
+    return reply.sendFile('index.html')
+  })
+} else {
+  app.setNotFoundHandler((_request, reply) =>
+    reply.status(404).send({
+      error: 'Frontend build not found. Run `npm run build` before starting the server.',
+    }),
+  )
+}
 
 /** Wraps a handler so every failure becomes a clean { error } payload, never a stack trace. */
 const handle = <T>(
@@ -327,6 +361,23 @@ const timer = setInterval(async () => {
 }, TICK_MS)
 
 timer.unref?.()
+
+// A deploy or restart must not lose the last few hundred milliseconds of
+// trading activity, so flush the paper snapshot before exiting.
+const shutdown = async (signal: string) => {
+  console.log(`${signal} received, saving paper state...`)
+  try {
+    const paper = getBroker('paper')
+    if (paper instanceof PaperTradingAdapter) paper.flush()
+    await app.close()
+  } catch (err) {
+    console.error('Error during shutdown:', err)
+  }
+  process.exit(0)
+}
+
+process.on('SIGTERM', () => void shutdown('SIGTERM'))
+process.on('SIGINT', () => void shutdown('SIGINT'))
 
 const start = async () => {
   try {
