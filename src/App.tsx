@@ -38,11 +38,10 @@ function RequireToken({ children }: { children: React.ReactNode }) {
         const { required } = await api.request<{ required: boolean }>('/auth/required')
         if (!alive) return
         if (!required) {
-          // No token needed on this server — go straight in
           setState('open')
           return
         }
-        // Token required — check if a stored token is accepted
+        // Check if token is already stored and valid
         try {
           await api.getBrokers()
           if (alive) setState('open')
@@ -50,8 +49,8 @@ function RequireToken({ children }: { children: React.ReactNode }) {
           if (alive) setState('locked')
         }
       } catch {
-        // Cannot reach server — show it rather than blank screen
-        if (alive) setState('open')
+        // If /auth/required fails (e.g. 401/503), token is definitely required or server needs gate
+        if (alive) setState('locked')
       }
     })()
     return () => { alive = false }
@@ -69,14 +68,7 @@ function App() {
     <Routes>
       <Route path="/" element={<Welcome />} />
       <Route path="/login" element={<Login />} />
-      <Route
-        path="/token"
-        element={
-          <RequireToken>
-            <TokenGate />
-          </RequireToken>
-        }
-      />
+      <Route path="/token" element={<TokenGate />} />
       <Route
         path="/connect-broker"
         element={
