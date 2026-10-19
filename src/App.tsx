@@ -8,14 +8,25 @@ import Terminal from './pages/Terminal'
 import Settings from './pages/Settings'
 import * as api from './services/api'
 
-/**
- * Gate for a hosted terminal.
- *
- * When the server requires a token, every route redirects to the token screen
- * until one is stored. The check is a single unauthenticated probe, and it runs
- * only once per load so a failed API call deeper in the app never bounces the
- * user out of a working session.
- */
+function LoadingScreen() {
+  return (
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      height: '100vh',
+      background: '#080b10',
+      color: '#f08418',
+      fontFamily: 'monospace',
+      gap: '1rem'
+    }}>
+      <div style={{ fontSize: '2rem' }}>⚡</div>
+      <div style={{ fontSize: '1rem', opacity: 0.7 }}>Loading Bountiful…</div>
+    </div>
+  )
+}
+
 function RequireToken({ children }: { children: React.ReactNode }) {
   const location = useLocation()
   const [state, setState] = useState<'checking' | 'open' | 'locked'>('checking')
@@ -27,22 +38,26 @@ function RequireToken({ children }: { children: React.ReactNode }) {
         const { required } = await api.request<{ required: boolean }>('/auth/required')
         if (!alive) return
         if (!required) {
+          // No token needed on this server — go straight in
           setState('open')
           return
         }
-        // A stored token still has to be accepted by the server.
-        await api.getBrokers()
-        if (alive) setState('open')
+        // Token required — check if a stored token is accepted
+        try {
+          await api.getBrokers()
+          if (alive) setState('open')
+        } catch {
+          if (alive) setState('locked')
+        }
       } catch {
-        if (alive) setState('locked')
+        // Cannot reach server — show it rather than blank screen
+        if (alive) setState('open')
       }
     })()
-    return () => {
-      alive = false
-    }
+    return () => { alive = false }
   }, [])
 
-  if (state === 'checking') return null
+  if (state === 'checking') return <LoadingScreen />
   if (state === 'locked' && location.pathname !== '/token') {
     return <Navigate to="/token" replace />
   }

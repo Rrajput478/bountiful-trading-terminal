@@ -24,8 +24,8 @@ function Welcome() {
           built around your workflow.
         </p>
 
-        <Link to="/login" className="start-button">
-          Get Started
+        <Link to="/connect-broker" className="start-button">
+          Open Terminal
           <span>→</span>
         </Link>
 
@@ -49,7 +49,7 @@ function Welcome() {
       </main>
 
       <div className="welcome-footer">
-        Bountiful Trading Terminal · v0.1.0
+        Bountiful Trading Terminal · v4.0.0
       </div>
 
     </div>
