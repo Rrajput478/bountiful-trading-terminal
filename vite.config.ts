@@ -7,7 +7,7 @@ import { defineConfig } from 'vite'
 // `file:///android_asset/index.html`, where absolute `/assets/...` paths would
 // resolve to the filesystem root and 404.
 export default defineConfig({
-  base: './',
+  base: '/',
   plugins: [react()],
   build: {
     outDir: 'dist',
