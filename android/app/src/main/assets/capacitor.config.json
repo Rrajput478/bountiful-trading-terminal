@@ -1,0 +1,10 @@
+{
+	"appId": "com.bountiful.trading",
+	"appName": "Bountiful Trading Terminal",
+	"webDir": "dist",
+	"bundledWebRuntime": false,
+	"server": {
+		"url": "https://bountiful-trading-terminal-1.onrender.com",
+		"cleartext": true
+	}
+}
