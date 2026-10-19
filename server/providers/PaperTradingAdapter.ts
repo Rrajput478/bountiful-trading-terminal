@@ -1,7 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import type { Account, Balance, BrokerAdapter, BrokerCapabilities, BrokerId, Order, OrderBook, OrderRequest, OrderType, Position, Quote, SizeMode, SizePreview, Trade } from '../BrokerAdapter'
+import type { Account, Balance, BrokerAdapter, BrokerCapabilities, BrokerId,
+ Candle, Order, OrderBook, OrderRequest, OrderType, Position, Quote, SizeMode, SizePreview, Trade } from '../BrokerAdapter'
 
 import { PaperMarketDataProvider } from '../market-data/PaperMarketDataProvider'
 import type { SymbolSpec } from '../market-data/PaperMarketDataProvider'
@@ -191,6 +192,11 @@ export class PaperTradingAdapter implements BrokerAdapter {
       volume24h: q.volume24h,
       timestamp: q.timestamp,
     }
+  }
+
+  /** Candles come from the shared provider, which owns the price walk. */
+  async getCandles(symbol: string, timeframe: string, limit = 200): Promise<Candle[]> {
+    return this.marketData.getCandles(symbol, timeframe, limit)
   }
 
   async previewSize(

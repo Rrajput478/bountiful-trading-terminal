@@ -154,6 +154,16 @@ export interface BrokerCapabilities {
   supportedMarkets: ('CRYPTO' | 'EQUITY' | 'F&O')[]
 }
 
+/** One OHLCV bar. `time` is a unix timestamp in seconds, matching the chart. */
+export interface Candle {
+  time: number
+  open: number
+  high: number
+  low: number
+  close: number
+  volume?: number
+}
+
 export interface BrokerAdapter {
   id: BrokerId
   name: string
@@ -192,4 +202,10 @@ export interface BrokerAdapter {
     input: number,
     leverage: number,
   ): Promise<SizePreview>
+
+  /** Historical candles for the chart. */
+  getCandles(symbol: string, timeframe: string, limit: number): Promise<Candle[]>
+
+  /** One polling cycle: advance paper prices, expire pending orders, trip TP/SL. */
+  tick?(): Promise<void>
 }

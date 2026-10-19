@@ -1,37 +1,34 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BrowserRouter, HashRouter } from 'react-router'
+import { BrowserRouter } from 'react-router'
 import './index.css'
 import App from './App.tsx'
-import * as api from './services/api'
 
 /*
- * Inside the APK the app is served from `file:///android_asset/index.html`,
- * where path-based routing cannot work: `/settings` would resolve to the
- * filesystem root and fail to load. Hash routing works on both origins, so it
- * is used there and the plain path router is kept for the web build.
+ * A single path-based router for every surface.
+ *
+ * The Android shell loads the app from the terminal server over https, so
+ * path routing and deep links work exactly as they do in a browser. An earlier
+ * `file://` shell needed hash routing instead; that is no longer how the app is
+ * packaged.
  */
-const Router = api.isNative() ? HashRouter : BrowserRouter
-
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <Router>
+    <BrowserRouter>
       <App />
-    </Router>
+    </BrowserRouter>
   </StrictMode>,
 )
 
 /*
  * Register the service worker so the terminal is installable from a browser on
- * Android and iOS. It is skipped in the native shell: that app is already
- * installed, and a worker on a file:// origin cannot register at all.
+ * Android and iOS. It is skipped in dev, where a cached shell would serve stale
+ * assets and make hot reload look broken.
  */
-if (!api.isNative() && 'serviceWorker' in navigator && import.meta.env.PROD) {
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch((err) => {
-      // An install prompt is still possible without a worker, so never break
-      // the app over this - just report it.
-      console.warn('Service worker registration failed:', err)
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      // Installation is a progressive enhancement: the app works without it.
     })
   })
 }

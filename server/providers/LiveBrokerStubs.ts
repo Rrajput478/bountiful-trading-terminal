@@ -1,4 +1,4 @@
-import type { Account, Balance, BrokerAdapter, BrokerCapabilities, BrokerId, Order, OrderBook, OrderRequest, Position, Quote, SizeMode, SizePreview, Trade } from '../BrokerAdapter'
+import type { Account, Balance, BrokerAdapter, BrokerCapabilities, BrokerId, Candle, Order, OrderBook, OrderRequest, Position, Quote, SizeMode, SizePreview, Trade } from '../BrokerAdapter'
 import { PaperMarketDataProvider } from '../market-data/PaperMarketDataProvider'
 
 /**
@@ -121,6 +121,10 @@ export abstract class NotImplementedBrokerAdapter implements BrokerAdapter {
 
   async getTrades(): Promise<Trade[]> {
     return []
+  }
+
+  async getCandles(): Promise<Candle[]> {
+    throw new Error(`${this.name} adapter is not implemented.`)
   }
 
   async previewSize(

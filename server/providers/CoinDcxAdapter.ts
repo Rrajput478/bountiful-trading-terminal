@@ -5,6 +5,7 @@ import type {
   BrokerAdapter,
   BrokerCapabilities,
   BrokerId,
+  Candle,
   Order,
   OrderBook,
   OrderRequest,
@@ -43,6 +44,13 @@ const HOSTS: Record<string, string> = {
   markets: `${PUBLIC_BASE}/v1/markets`,
   tickers: `${REST_BASE}/v1/tickers`,
 }
+
+/**
+ * Candles live on a different base again — `/market_data/candles`, not under
+ * `/exchange` — and are returned newest-first, so they must be reversed for a
+ * chart that reads left-to-right in time.
+ */
+const CANDLES_URL = `${PUBLIC_BASE}/market_data/candles`
 
 interface Creds {
   apiKey: string
@@ -453,6 +461,37 @@ export class CoinDcxAdapter implements BrokerAdapter {
     const found = refreshed.find((p) => this.sameSymbol(p.symbol, target.symbol))
     if (!found) throw new Error(`Position for ${symbol} disappeared after modification.`)
     return found
+  }
+
+    async getCandles(symbol: string, timeframe: string, limit = 200): Promise<Candle[]> {
+    const pair = this.toFuturesMarket(symbol)
+    const qs = new URLSearchParams({ pair, interval: timeframe, limit: String(limit) })
+    const res = await fetch(`${CANDLES_URL}?${qs}`)
+    const text = await res.text()
+    if (!res.ok) {
+      throw new Error(`CoinDCX candles failed (${res.status}): ${text.slice(0, 160)}`)
+    }
+    const rows = JSON.parse(text) as {
+      open: number
+      high: number
+      low: number
+      close: number
+      volume: number
+      time: number
+    }[]
+    if (!Array.isArray(rows)) return []
+    // Newest first upstream; the chart wants oldest first.
+    return rows
+      .map((r) => ({
+        time: Math.floor(num(r.time) / 1000),
+        open: num(r.open),
+        high: num(r.high),
+        low: num(r.low),
+        close: num(r.close),
+        volume: num(r.volume),
+      }))
+      .filter((c) => c.close > 0)
+      .reverse()
   }
 
   /** CoinDCX futures markets are `B-BTC_USDT` while the UI asks for `BTCUSDT`. */

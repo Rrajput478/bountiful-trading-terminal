@@ -1,164 +1,122 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router'
+import { Link } from 'react-router'
 import * as api from '../services/api'
 import './Settings.css'
 
 /**
- * Broker credentials, stored in the Android Keystore.
+ * Broker configuration, read-only by design.
  *
- * The secret is handed straight to the native bridge and never held in React
- * state beyond the submit call, never logged, and cannot be read back — there
- * is no getter on the bridge. Refusing to run in a browser is deliberate: a key
- * typed into a web page is a key in a browser's memory, in history, and in
- * devtools.
+ * The API key for a live broker lives only in the terminal server's
+ * environment. This page therefore cannot enter, view, or change a key — it
+ * reports what the server has configured and lets the operator verify the
+ * connection. Anyone who could edit a key here could also read it, so the
+ * capability is deliberately absent from the client.
  */
-export default function Settings() {
-  const navigate = useNavigate()
-  const [apiKey, setApiKey] = useState('')
-  const [apiSecret, setApiSecret] = useState('')
-  const [configured, setConfigured] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [message, setMessage] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
 
-  const native = api.isNative()
+interface BrokerRow {
+  id: string
+  name: string
+  description: string
+  enabled: boolean
+  connected: boolean
+  isLive: boolean
+}
+
+export default function Settings() {
+  const [brokers, setBrokers] = useState<BrokerRow[]>([])
+  const [active, setActive] = useState<string>('paper')
+  const [status, setStatus] = useState<{ mode: string; liveEnabled: boolean } | null>(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const load = async () => {
+    try {
+      const [list, current, health] = await Promise.all([
+        api.getBrokers(),
+        api.request<{ broker: string }>('/broker/active'),
+        api.getHealth(),
+      ])
+      setBrokers(list as BrokerRow[])
+      setActive(current.broker)
+      setStatus({ mode: health.mode, liveEnabled: health.liveTradingEnabled })
+      setError('')
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
 
   useEffect(() => {
-    setConfigured(api.hasCredentials())
+    void load()
   }, [])
 
-  const save = async () => {
+  const choose = async (brokerId: string) => {
     setBusy(true)
-    setError(null)
-    setMessage(null)
+    setError('')
     try {
-      await api.saveCredentials(apiKey.trim(), apiSecret.trim())
-      // Wipe the inputs: the plaintext must not linger in the DOM.
-      setApiKey('')
-      setApiSecret('')
-      setConfigured(true)
-      setMessage('Saved to this device’s secure keystore.')
+      await api.selectBroker(brokerId)
+      await load()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not save the key.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const verify = async () => {
-    setBusy(true)
-    setError(null)
-    setMessage(null)
-    try {
-      const res = await api.verifyCredentials()
-      setMessage(`Connected as ${res.username || res.email || res.user_id || 'your account'}.`)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not verify the key.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const forget = async () => {
-    setBusy(true)
-    try {
-      await api.clearCredentials()
-      setConfigured(false)
-      setMessage('Key removed from this device.')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not remove the key.')
+      setError((e as Error).message)
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <div className="settings-page">
-      <header className="settings-bar">
-        <button type="button" className="icon-btn" onClick={() => navigate('/terminal')} aria-label="Back">
-          ←
-        </button>
-        <h1>Broker Keys</h1>
+    <div className="settings">
+      <header className="settings-head">
+        <h1>Broker settings</h1>
+        <Link to="/terminal" className="settings-back">
+          Terminal
+        </Link>
       </header>
 
-      <main className="settings-body">
-        {!native && (
-          <div className="settings-note">
-            This screen is only available inside the installed Android app. In a browser
-            there is no secure store, so keys are refused rather than handled unsafely.
-            Open the app from your home-screen icon.
-          </div>
-        )}
+      {status && (
+        <p className="settings-mode">
+          Server mode: <strong>{status.mode}</strong>
+          {!status.liveEnabled && ' · live trading is disabled on this server'}
+        </p>
+      )}
 
-        <section className="settings-card">
-          <div className="settings-status">
-            CoinDCX ·{' '}
-            <strong className={configured ? 'ok' : 'off'}>
-              {configured ? 'KEY SAVED' : 'NO KEY'}
-            </strong>
-          </div>
+      <section className="settings-note">
+        <h2>Where your API key lives</h2>
+        <p>
+          Broker keys are stored in the terminal server&rsquo;s environment, never in this app. The
+          app has no field for a key and no way to read one, so the key cannot leak from the
+          device. To change a key, update the server&rsquo;s environment variables and restart it.
+        </p>
+      </section>
 
-          <label className="settings-label" htmlFor="api-key">
-            API key
-          </label>
-          <input
-            id="api-key"
-            className="settings-input"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder="Paste your CoinDCX API key"
-            autoComplete="off"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-          />
+      {error && <p className="settings-error">{error}</p>}
 
-          <label className="settings-label" htmlFor="api-secret">
-            API secret
-          </label>
-          <input
-            id="api-secret"
-            className="settings-input"
-            value={apiSecret}
-            onChange={(e) => setApiSecret(e.target.value)}
-            placeholder="Paste your CoinDCX API secret"
-            type="password"
-            autoComplete="off"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-          />
-
-          <div className="settings-actions">
+      <ul className="settings-list">
+        {brokers.map((b) => (
+          <li key={b.id} className="settings-item">
+            <div className="settings-item-main">
+              <strong>{b.name}</strong>
+              <span className="settings-item-desc">{b.description}</span>
+              <span className="settings-item-state">
+                {b.id === active
+                  ? 'Active'
+                  : b.enabled
+                    ? 'Available'
+                    : 'Not configured on this server'}
+              </span>
+            </div>
             <button
               type="button"
-              className="settings-btn primary"
-              onClick={save}
-              disabled={busy || !apiKey.trim() || !apiSecret.trim()}
+              disabled={busy || b.id === active || !b.enabled}
+              onClick={() => void choose(b.id)}
             >
-              {busy ? 'Working…' : 'Save key'}
+              {b.id === active ? 'Active' : b.enabled ? 'Use' : 'Unavailable'}
             </button>
-            <button type="button" className="settings-btn" onClick={verify} disabled={busy || !configured}>
-              Verify
-            </button>
-            <button type="button" className="settings-btn danger" onClick={forget} disabled={busy || !configured}>
-              Remove
-            </button>
-          </div>
+          </li>
+        ))}
+      </ul>
 
-          {message && <div className="settings-ok">{message}</div>}
-          {error && <div className="settings-error">{error}</div>}
-        </section>
-
-        <section className="settings-card warn">
-          <h2>Before you trade</h2>
-          <ul>
-            <li>Enable only “read” and “trade” permissions on the key. Never enable withdrawals.</li>
-            <li>Start with a very small amount so a bug cannot cost you much.</li>
-            <li>This app is not exchange-certified. Test thoroughly before increasing size.</li>
-          </ul>
-        </section>
-      </main>
+      <Link to="/connect-broker" className="settings-link">
+        Connect a broker
+      </Link>
     </div>
   )
 }
