@@ -66,9 +66,8 @@ function tokenMatches(candidate: string): boolean {
 
 app.addHook('onRequest', async (request, reply) => {
   const path = request.url.split('?')[0]
-  // The health probe is how Render and the app itself confirm the process is
-  // up; it must answer before any credential check.
-  if (path === '/api/health') return
+  // The health probe and /api/auth/required must answer before any credential check.
+  if (path === '/api/health' || path === '/api/auth/required') return
 
   if (!ACCESS_TOKEN) {
     if (path.startsWith('/api')) {
